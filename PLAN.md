@@ -18,7 +18,7 @@ We are transforming `/Users/iandodge/Documents/Spotify-UI-Clone` from a static H
 - [x] 7. Implement Continuous Nonstop Playback & Gapless/Crossfade Audio Engine (`player.js`): dual-deck HTML5 Audio + Web Audio API crossfader (configurable 0–12s crossfade), automatic endless queue replenishment when fewer than 3 tracks remain, keyboard shortcuts, and MediaSession API integration.
 - [x] 8. Build rich Artist, Album, and Song Detail Views with one-click "Start Mix" hero buttons: clicking any artist or album opens a dedicated header view showing top tracks, discography, "Similar in Your Library" recommendations, and a prominent "Start Mix" radio button.
 - [x] 9. Build Instant Omni-Search with "Start Mix from Search Results": live filtering across songs, artists, albums, and genres/moods as you type, featuring a "Top Result" hero card and a "Start Search Mix" button that turns any search query into an endless tailored radio station.
-- [ ] 10. Implement Spotify-style Smart Auto-Mixes & YT Music "Supermix" on the Home Dashboard: automatically generate *Your Supermix*, *Daily Mix 1–3* (clustered by genre/artist/vibe), *On Repeat*, *Rediscover / Forgotten Favorites*, and *Jump Back In* shelves.
+- [x] 10. Implement Spotify-style Smart Auto-Mixes & YT Music "Supermix" on the Home Dashboard: automatically generate *Your Supermix*, *Daily Mix 1–3* (clustered by genre/artist/vibe), *On Repeat*, *Rediscover / Forgotten Favorites*, and *Jump Back In* shelves.
 - [ ] 11. Add Browser Local Audio Import (Drag-and-Drop / Folder Picker) & Custom Playlists: allow users on Vercel or localhost to drag-and-drop or pick local `.mp3`/`.flac`/`.wav` files/folders directly in the browser (persisted in IndexedDB with client-side ID3/filename parsing and cover art generation), plus create/edit custom playlists and "Liked Songs".
 - [ ] 12. Playtest, UI polish, create private GitHub repo, build `README.md` with 1-click "Deploy with Vercel" button at the top, commit & push to `main`: verify Vercel static deployment config (`vercel.json`, `package.json`), create a new private GitHub repository via `gh repo create`, wire the Vercel deploy button URL to the new repo, and push everything to `main`.
 
@@ -284,3 +284,32 @@ We are transforming `/Users/iandodge/Documents/Spotify-UI-Clone` from a static H
   - Spotify-style Smart Auto-Mixes & YT Music "Supermix" shelves on the Home Dashboard (`#home-shelves`: *Your Supermix*, *Daily Mix 1–3*, *On Repeat*, *Rediscover / Forgotten Favorites*, *Jump Back In*) is Item 10.
 - **Testing & verification**:
   - Added `tests/omni-search.test.js` and ran `npm test` (`node --test tests/*.test.js`): all 40 tests across 9 test files pass.
+
+### 10. Spotify-style Smart Auto-Mixes & YT Music "Supermix" on the Home Dashboard
+- **Files created/updated**:
+  - `index.html` (populated `#home-shelves` with semantic shelves `#shelf-smart-mixes` > `#smart-mixes-grid`, `#shelf-jump-back-in` > `#jump-back-in-grid`, `#shelf-on-repeat` > `#on-repeat-grid`, and `#shelf-rediscover` > `#rediscover-grid`, plus shelf-header one-click mix triggers `#shelf-supermix-btn`, `#shelf-jump-back-in-mix-btn`, `#shelf-on-repeat-mix-btn`, and `#shelf-rediscover-mix-btn`)
+  - `style.css` (added responsive styling for `.home-shelves`, `.home-shelf` with `content-visibility: auto; contain-intrinsic-size: auto 300px` and `@supports not (content-visibility: auto)` containment fallback, `.smart-mixes-grid`, `.smart-mix-card` with `[data-mix-theme="supermix|daily-1|daily-2|daily-3"]` gradients and `.active-mix-station` highlight, 2x2 `.smart-mix-collage`, `.smart-mix-preview-list`, `.shelf-track-grid`, and `.shelf-track-card`)
+  - `queue.js` (extended `VALID_SEED_TYPES` and `normalizeMixSeed` to support `"daily-mix"`, `"smart-mix"`, `"on-repeat"`, `"rediscover"`, and `"jump-back-in"` seed types and preserve `smartMixId` on `activeMixSession`)
+  - `script.js` (implemented `buildSupermixData`, `buildDailyMixes`, `buildOnRepeatShelf`, `buildRediscoverShelf`, `buildJumpBackInShelf`, `buildHomeShelvesData`, `renderHomeShelves`, `startSmartMix`, interactive station/track card builders, and Left Library Sidebar `Mixes` integration)
+  - `tests/smart-mixes.test.js` (automated test suite verifying Home Shelves DOM/CSS landmarks, *Your Supermix* and *Daily Mix 1–3* genre/artist/vibe clustering, telemetry-driven *On Repeat*, *Rediscover / Forgotten Favorites*, and *Jump Back In* ranking, nonstop radio mix launches, and Left Sidebar `Mixes` integration)
+- **How it works & Key APIs for later steps (`window.SpotTubeShell`)**:
+  - **Your Supermix (`buildSupermixData(catalog, options)`)**:
+    - Scores all catalog tracks by `SpotTubeStorage.computeTasteAffinity`, liked status, completion counts/ratios, skip penalties, popularity, and active mood filter, selects diverse cross-genre seed tracks, and ranks the full station via `SpotTubeRecommender.recommendTracks`.
+    - Returns `{ id: "supermix", type: "supermix", badge: "YT MUSIC SUPERMIX", shortBadge: "SUPERMIX", title: "Your Supermix", vibeTitle, subtitle, description, collageCovers, artists, genres, moods, avgBpm, avgEnergyPct, tracks, previewTracks, seedSpec }`.
+  - **Daily Mix 1–3 (`buildDailyMixes(catalog, options)`)**:
+    - Automatically clusters the catalog (including any user-imported tracks from Item 11) by genre, subgenre, language, mood, and audio features into 3 distinct Spotify-style Daily Mixes with guaranteed distinct lead tracks and 2x2 cover collages:
+      - `daily-mix-1` (*Daily Mix 1: Bollywood Romance & Soul*)
+      - `daily-mix-2` (*Daily Mix 2: Hip-Hop & High-Voltage Trap*)
+      - `daily-mix-3` (*Daily Mix 3: Pop, Punjabi & Feel-Good Grooves*)
+  - **Personalized Telemetry Shelves**:
+    - `buildJumpBackInShelf(catalog, options)` -> orders unique recently played tracks from `SpotTubeStorage.getRecentlyPlayed()` by most recent `playedAt` timestamp (excluding early-skipped tracks and formatting relative recency badges like `"JUST PLAYED"`, `"PLAYED 5M AGO"`), filling remaining slots with active/liked/distinct-artist resume picks.
+    - `buildOnRepeatShelf(catalog, options)` -> ranks heavy-rotation tracks by `playCount`, `fullCompletions`, `avgCompletionRatio`, and `isLiked` (`"ON REPEAT • N PLAYS"`, `"♥ LIKED FAVORITE"`).
+    - `buildRediscoverShelf(catalog, options)` -> surfaces forgotten favorites (previously liked or completed tracks not in the immediate last 2 plays or with older `lastPlayedAt` timestamps) alongside unplayed hidden gems and classic deep cuts (`"FORGOTTEN FAVORITE"`, `"HIDDEN GEM • UNPLAYED"`, `"DEEP CUT • YYYY"`).
+  - **Aggregator, Renderer & Radio Launcher**:
+    - `buildHomeShelvesData(options)` -> returns `{ moodFilter, supermix, dailyMixes, smartMixes, jumpBackIn, onRepeat, rediscover, shelves }`.
+    - `renderHomeShelves(options)` -> renders `#smart-mixes-grid`, `#jump-back-in-grid`, `#on-repeat-grid`, and `#rediscover-grid`, and highlights the active smart mix station card (`.active-mix-station`).
+    - `startSmartMix(mixIdOrSpec, options)` -> launches a nonstop radio station in `SpotTubeQueue` from `"supermix"`, `"daily-mix-1"`, `"daily-mix-2"`, `"daily-mix-3"`, `"on-repeat"`, `"rediscover"`, or `"jump-back-in"`.
+- **Deferred / Not done yet**:
+  - Browser Local Audio Import (Drag-and-Drop / Folder Picker persisted in IndexedDB with ID3/filename parsing and generated cover art) & Custom Playlists + "Liked Songs" view is Item 11.
+- **Testing & verification**:
+  - Added `tests/smart-mixes.test.js` and ran `npm test` (`node --test tests/*.test.js`): all 44 tests across 10 test files pass.

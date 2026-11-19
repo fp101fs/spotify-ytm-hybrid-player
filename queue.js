@@ -21,7 +21,20 @@
         root.SpotTubeQueue = factory(root);
     }
 })(typeof globalThis !== "undefined" ? globalThis : typeof window !== "undefined" ? window : this, function (globalScope) {
-    const VALID_SEED_TYPES = ["track", "artist", "album", "mood", "search", "supermix", "playlist"];
+    const VALID_SEED_TYPES = [
+        "track",
+        "artist",
+        "album",
+        "mood",
+        "search",
+        "supermix",
+        "daily-mix",
+        "smart-mix",
+        "on-repeat",
+        "rediscover",
+        "jump-back-in",
+        "playlist",
+    ];
     const VALID_MIX_MODES = ["all", "familiar", "discover", "deep-cuts", "upbeat", "chill"];
 
     const MIX_MODE_PROFILES = {
@@ -172,9 +185,25 @@
             seedSpec === "supermix" ||
             (typeof seedSpec === "object" && normalizeString(seedSpec.type) === "supermix")
         ) {
-            // Seed Supermix with liked tracks + recently completed favorites, or top popular tracks
+            // Seed Supermix with explicit seed tracks, or liked tracks + recently completed favorites, or top popular tracks
             let supermixSeeds = [];
-            if (storage && typeof storage.getLikedTrackIds === "function") {
+            if (seedSpec && typeof seedSpec === "object") {
+                const candidateList = Array.isArray(seedSpec.tracks)
+                    ? seedSpec.tracks
+                    : Array.isArray(seedSpec.seedTracks)
+                      ? seedSpec.seedTracks
+                      : [];
+                if (candidateList.length > 0) {
+                    supermixSeeds = candidateList
+                        .map((item) => findTrackInCatalog(catalog, item))
+                        .filter(Boolean);
+                }
+            }
+            if (
+                supermixSeeds.length === 0 &&
+                storage &&
+                typeof storage.getLikedTrackIds === "function"
+            ) {
                 const likedIds = new Set(storage.getLikedTrackIds());
                 supermixSeeds = catalog.filter((t) => likedIds.has(t.id));
             }
@@ -190,7 +219,8 @@
             }
             return {
                 type: "supermix",
-                badge: "SUPERMIX",
+                smartMixId: (seedSpec && seedSpec.smartMixId) || "supermix",
+                badge: (seedSpec && seedSpec.badge) || "SUPERMIX",
                 label: (seedSpec && seedSpec.label) || "Your Nonstop Supermix",
                 autoplayLabel: "Endless Auto",
                 seedTracks: supermixSeeds,
@@ -323,6 +353,53 @@
                     seedTracks: resolved,
                     mood: moodName,
                     moodFilter: moodName,
+                    searchQuery: "",
+                };
+            }
+
+            // Smart Auto-Mix / Daily Mix / Shelf seed (Daily Mix 1–3, On Repeat, Rediscover, Jump Back In)
+            if (
+                explicitType === "daily-mix" ||
+                explicitType === "smart-mix" ||
+                explicitType === "on-repeat" ||
+                explicitType === "rediscover" ||
+                explicitType === "jump-back-in" ||
+                explicitType === "playlist" ||
+                seedSpec.smartMixId
+            ) {
+                const candidateList = Array.isArray(seedSpec.tracks)
+                    ? seedSpec.tracks
+                    : Array.isArray(seedSpec.seedTracks)
+                      ? seedSpec.seedTracks
+                      : [];
+                let resolvedSeeds = candidateList
+                    .map((item) => findTrackInCatalog(catalog, item))
+                    .filter(Boolean);
+                if (resolvedSeeds.length === 0) {
+                    resolvedSeeds = catalog.slice(0, 3);
+                }
+                const defaultBadge =
+                    explicitType === "daily-mix"
+                        ? "DAILY MIX"
+                        : explicitType === "on-repeat"
+                          ? "ON REPEAT MIX"
+                          : explicitType === "rediscover"
+                            ? "REDISCOVER MIX"
+                            : explicitType === "jump-back-in"
+                              ? "JUMP BACK IN"
+                              : "SMART MIX";
+                return {
+                    type: explicitType || "smart-mix",
+                    smartMixId:
+                        seedSpec.smartMixId || seedSpec.id || explicitType || "smart-mix",
+                    badge: seedSpec.badge || defaultBadge,
+                    label:
+                        seedSpec.label ||
+                        seedSpec.title ||
+                        `${resolvedSeeds[0].title} • Smart Auto-Mix`,
+                    autoplayLabel: seedSpec.autoplayLabel || "Endless Auto",
+                    seedTracks: resolvedSeeds,
+                    moodFilter: seedSpec.moodFilter || options.moodFilter || "All",
                     searchQuery: "",
                 };
             }
@@ -756,6 +833,7 @@
             activeMixSession = {
                 id: `mix-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
                 type: normalized.type,
+                smartMixId: normalized.smartMixId || null,
                 badge: normalized.badge,
                 label: normalized.label,
                 autoplayLabel: normalized.autoplayLabel || "Endless Auto",

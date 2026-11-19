@@ -223,8 +223,80 @@
                         </div>
                     </section>
 
-                    <!-- Dynamic Smart Shelves Container (for Item 10) -->
-                    <div id="home-shelves" class="home-shelves"></div>
+                    <!-- Dynamic Smart Shelves Container (Item 10: Your Supermix, Daily Mix 1–3, Jump Back In, On Repeat, Rediscover) -->
+                    <div id="home-shelves" class="home-shelves" aria-label="Smart Auto-Mixes and Personalized Shelves">
+                        <!-- Shelf 1: Your Supermix & Daily Mix 1–3 -->
+                        <section class="home-shelf smart-mixes-shelf" id="shelf-smart-mixes" aria-labelledby="shelf-smart-mixes-title">
+                            <div class="section-header shelf-header">
+                                <div class="shelf-title-group">
+                                    <span class="shelf-eyebrow">MADE FOR YOU &bull; YT MUSIC + SPOTIFY HYBRID</span>
+                                    <h2 id="shelf-smart-mixes-title">Your Supermix &amp; Daily Mixes</h2>
+                                </div>
+                                <div class="shelf-header-actions">
+                                    <span class="section-meta" id="shelf-smart-mixes-meta">4 auto-generated stations</span>
+                                    <button type="button" class="shelf-mix-btn" id="shelf-supermix-btn" data-smart-mix-trigger="supermix" title="Start Your Nonstop Supermix">
+                                        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 4a3 3 0 1 1 0 6 3 3 0 0 1 0-6z"/></svg>
+                                        <span>Play Supermix</span>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="smart-mixes-grid" id="smart-mixes-grid" role="list" aria-label="Your Supermix and Daily Mixes 1 to 3"></div>
+                        </section>
+
+                        <!-- Shelf 2: Jump Back In -->
+                        <section class="home-shelf jump-back-in-shelf" id="shelf-jump-back-in" aria-labelledby="shelf-jump-back-in-title">
+                            <div class="section-header shelf-header">
+                                <div class="shelf-title-group">
+                                    <span class="shelf-eyebrow">RECENT SESSIONS &bull; INSTANT RESUME</span>
+                                    <h2 id="shelf-jump-back-in-title">Jump Back In</h2>
+                                </div>
+                                <div class="shelf-header-actions">
+                                    <span class="section-meta" id="shelf-jump-back-in-meta">Recent plays &amp; active vibes</span>
+                                    <button type="button" class="shelf-mix-btn" id="shelf-jump-back-in-mix-btn" data-smart-mix-trigger="jump-back-in" title="Start radio mix from your recent listening sessions">
+                                        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 4a3 3 0 1 1 0 6 3 3 0 0 1 0-6z"/></svg>
+                                        <span>Start Jump Back In Mix</span>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="shelf-track-grid jump-back-in-grid" id="jump-back-in-grid" role="list" aria-label="Jump Back In Recent Tracks"></div>
+                        </section>
+
+                        <!-- Shelf 3: On Repeat -->
+                        <section class="home-shelf on-repeat-shelf" id="shelf-on-repeat" aria-labelledby="shelf-on-repeat-title">
+                            <div class="section-header shelf-header">
+                                <div class="shelf-title-group">
+                                    <span class="shelf-eyebrow">HEAVY ROTATION &bull; HIGH AFFINITY</span>
+                                    <h2 id="shelf-on-repeat-title">On Repeat</h2>
+                                </div>
+                                <div class="shelf-header-actions">
+                                    <span class="section-meta" id="shelf-on-repeat-meta">Songs you can't stop playing</span>
+                                    <button type="button" class="shelf-mix-btn" id="shelf-on-repeat-mix-btn" data-smart-mix-trigger="on-repeat" title="Start nonstop radio mix from your On Repeat tracks">
+                                        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 4a3 3 0 1 1 0 6 3 3 0 0 1 0-6z"/></svg>
+                                        <span>Start On Repeat Mix</span>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="shelf-track-grid on-repeat-grid" id="on-repeat-grid" role="list" aria-label="On Repeat Heavy Rotation Tracks"></div>
+                        </section>
+
+                        <!-- Shelf 4: Rediscover / Forgotten Favorites -->
+                        <section class="home-shelf rediscover-shelf" id="shelf-rediscover" aria-labelledby="shelf-rediscover-title">
+                            <div class="section-header shelf-header">
+                                <div class="shelf-title-group">
+                                    <span class="shelf-eyebrow">DEEP CUTS &bull; FORGOTTEN FAVORITES</span>
+                                    <h2 id="shelf-rediscover-title">Rediscover &amp; Forgotten Favorites</h2>
+                                </div>
+                                <div class="shelf-header-actions">
+                                    <span class="section-meta" id="shelf-rediscover-meta">Hidden gems &amp; unplayed classics</span>
+                                    <button type="button" class="shelf-mix-btn" id="shelf-rediscover-mix-btn" data-smart-mix-trigger="rediscover" title="Start nonstop radio mix from Rediscover and Forgotten Favorites">
+                                        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 4a3 3 0 1 1 0 6 3 3 0 0 1 0-6z"/></svg>
+                                        <span>Start Rediscover Mix</span>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="shelf-track-grid rediscover-grid" id="rediscover-grid" role="list" aria-label="Rediscover and Forgotten Favorites Tracks"></div>
+                        </section>
+                    </div>
 
                     <!-- Primary Catalog Section -->
                     <section class="catalog-section" id="catalog-section" aria-labelledby="catalog-section-title">

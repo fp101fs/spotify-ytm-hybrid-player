@@ -20,6 +20,7 @@ let activeView = "home";
 let activeDetail = null;
 let activeSearchCategory = "all";
 let activeSearchResults = null;
+let activeHomeShelvesData = null;
 
 function getStorage() {
     if (typeof window !== "undefined" && window.SpotTubeStorage) {
@@ -304,10 +305,11 @@ function syncActiveTrackUI() {
         likeBtn.setAttribute("aria-pressed", String(isLiked));
     }
 
-    // 4. Update Right Drawer Now Playing, Up Next Queue, and Track Info panel
+    // 4. Update Right Drawer Now Playing, Up Next Queue, Track Info panel, and Home Smart Shelves
     renderDrawerNowPlaying(track);
     renderDrawerQueue();
     renderDrawerTrackInfo(track);
+    renderHomeShelves();
     syncCrossfadeUI();
 
     // 5. Highlight active track rows/cards if Detail View or Omni-Search View is currently open
@@ -846,6 +848,44 @@ function renderLibrarySidebar() {
             nodes.push(btn);
         }
     } else if (activeLibraryFilter === "playlists") {
+        const shelvesData = buildHomeShelvesData();
+        const smartMixItems = [
+            ...(shelvesData?.smartMixes || []),
+            shelvesData?.onRepeat
+                ? {
+                      id: "on-repeat",
+                      title: "On Repeat Mix",
+                      vibeTitle: "Heavy Rotation",
+                      coverUrl: shelvesData.onRepeat.tracks[0]?.coverUrl || songs[0]?.coverUrl,
+                  }
+                : null,
+            shelvesData?.rediscover
+                ? {
+                      id: "rediscover",
+                      title: "Rediscover Mix",
+                      vibeTitle: "Forgotten Favorites",
+                      coverUrl: shelvesData.rediscover.tracks[0]?.coverUrl || songs[0]?.coverUrl,
+                  }
+                : null,
+        ].filter(Boolean);
+
+        for (const mix of smartMixItems) {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "library-item";
+            btn.dataset.smartMixId = mix.id;
+            btn.innerHTML = `
+                <div class="lib-item-art"><img src="${mix.coverUrl}" alt="${mix.title}"></div>
+                <div class="lib-item-meta">
+                    <span class="lib-item-title">${mix.title}</span>
+                    <span class="lib-item-sub">Smart Mix &bull; ${mix.vibeTitle || "Auto-Station"}</span>
+                </div>`;
+            btn.addEventListener("click", () => {
+                startSmartMix(mix.id);
+            });
+            nodes.push(btn);
+        }
+
         const moodMixes = ["Upbeat", "Chill", "Romantic", "Late Night", "Deep Cuts"];
         for (const mood of moodMixes) {
             const match = songs.find((t) => (t.moods || []).includes(mood)) || songs[0];
@@ -4337,6 +4377,1334 @@ function playTopSearchResult() {
     return triggerTopResultPrimaryAction(results.topResult);
 }
 
+// ==================== SMART AUTO-MIXES & HOME DASHBOARD SHELVES (ITEM 10) ====================
+
+function getTrackTelemetryContext(track, store, now = Date.now()) {
+    const stats =
+        store && typeof store.getTrackStats === "function"
+            ? store.getTrackStats(track.id)
+            : null;
+    const affinityObj =
+        store && typeof store.computeTasteAffinity === "function"
+            ? store.computeTasteAffinity(track.id, now)
+            : null;
+    const isLiked =
+        likedTrackIds.has(track.id) ||
+        Boolean(stats?.liked) ||
+        Boolean(store && typeof store.isLiked === "function" && store.isLiked(track.id));
+    const isDisliked =
+        Boolean(stats?.disliked) ||
+        Boolean(store && typeof store.isDisliked === "function" && store.isDisliked(track.id));
+
+    return {
+        stats,
+        affinityScore: Number(affinityObj?.normalizedScore ?? 0.5),
+        rawAffinity: Number(affinityObj?.score ?? 0),
+        playCount: Number(stats?.playCount || 0),
+        fullCompletions: Number(stats?.fullCompletions || 0),
+        avgCompletionRatio: Number(stats?.avgCompletionRatio || 0),
+        lastCompletionRatio: Number(stats?.lastCompletionRatio || 0),
+        earlySkipCount: Number(stats?.earlySkipCount || 0),
+        lateSkipCount: Number(stats?.lateSkipCount || 0),
+        skipPenalty: Number(stats?.skipPenalty || 0),
+        firstPlayedAt: stats?.firstPlayedAt || null,
+        lastPlayedAt: stats?.lastPlayedAt || null,
+        isLiked,
+        isDisliked,
+    };
+}
+
+function matchesActiveMoodChip(track, moodFilter) {
+    if (!moodFilter || moodFilter === "All") return true;
+    const target = String(moodFilter).trim().toLowerCase();
+    return (
+        (Array.isArray(track.moods) &&
+            track.moods.some((m) => String(m).toLowerCase() === target)) ||
+        String(track.genre || "").toLowerCase() === target ||
+        String(track.language || "").toLowerCase() === target
+    );
+}
+
+function collectDistinctCovers(trackList = [], fallbackTracks = [], count = 4) {
+    const covers = [];
+    for (const list of [trackList, fallbackTracks]) {
+        for (const t of list || []) {
+            if (t?.coverUrl && !covers.includes(t.coverUrl)) {
+                covers.push(t.coverUrl);
+                if (covers.length >= count) return covers;
+            }
+        }
+    }
+    while (covers.length < count && covers.length > 0) {
+        covers.push(covers[covers.length % covers.length]);
+    }
+    return covers.length > 0 ? covers : ["Images/Espresso.jpeg"];
+}
+
+function collectDistinctArtists(trackList = [], limit = 4) {
+    const artists = [];
+    for (const t of trackList) {
+        for (const a of getTrackArtistList(t)) {
+            if (!artists.some((x) => x.toLowerCase() === a.toLowerCase())) {
+                artists.push(a);
+                if (artists.length >= limit) return artists;
+            }
+        }
+    }
+    return artists;
+}
+
+/**
+ * Automatically builds the YT Music + Spotify Hybrid "Your Supermix" station descriptor.
+ * Blends the user's liked songs, high-completion favorites, top taste-affinity tracks,
+ * and sonic bridges across the entire catalog.
+ */
+function buildSupermixData(catalogInput, options = {}) {
+    const catalog = Array.isArray(catalogInput) && catalogInput.length > 0 ? catalogInput : songs;
+    if (!catalog.length) return null;
+
+    const store = options.storage !== undefined ? options.storage : getStorage();
+    const recommender = options.recommender !== undefined ? options.recommender : getRecommender();
+    const now = options.now || Date.now();
+    const moodFilter = options.moodFilter !== undefined ? options.moodFilter : activeMoodFilter;
+
+    const scored = catalog.map((track, idx) => {
+        const ctx = getTrackTelemetryContext(track, store, now);
+        const popularity = Number(track.popularity ?? 0.75);
+        const moodMatchBoost =
+            moodFilter && moodFilter !== "All" && matchesActiveMoodChip(track, moodFilter)
+                ? 0.18
+                : 0;
+        const supermixScore =
+            ctx.affinityScore * 0.48 +
+            (ctx.isLiked ? 0.26 : 0) +
+            Math.min(0.18, ctx.playCount * 0.05 + ctx.fullCompletions * 0.05) +
+            ctx.avgCompletionRatio * 0.1 +
+            popularity * 0.16 +
+            moodMatchBoost -
+            ctx.skipPenalty * 0.42 -
+            (ctx.isDisliked ? 0.75 : 0);
+
+        return {
+            track,
+            idx,
+            ctx,
+            supermixScore: Number(supermixScore.toFixed(4)),
+        };
+    });
+
+    scored.sort((a, b) => b.supermixScore - a.supermixScore || a.idx - b.idx);
+
+    // Pick diverse top seed tracks across distinct genres/artists so Supermix bridges the whole library
+    const seedTracks = [];
+    const seenSeedGenres = new Set();
+    const seenSeedArtists = new Set();
+
+    for (const item of scored) {
+        if (item.ctx.isDisliked && scored.some((s) => !s.ctx.isDisliked)) continue;
+        const genreKey = String(item.track.genre || "").toLowerCase();
+        const artistKey = String(item.track.primaryArtist || "").toLowerCase();
+        const isFavorite = item.ctx.isLiked || item.ctx.fullCompletions > 0 || item.ctx.playCount > 0;
+        if (
+            seedTracks.length === 0 ||
+            isFavorite ||
+            !seenSeedGenres.has(genreKey) ||
+            !seenSeedArtists.has(artistKey)
+        ) {
+            seedTracks.push(item.track);
+            if (genreKey) seenSeedGenres.add(genreKey);
+            if (artistKey) seenSeedArtists.add(artistKey);
+        }
+        if (seedTracks.length >= 4) break;
+    }
+    if (seedTracks.length === 0 && scored[0]) {
+        seedTracks.push(scored[0].track);
+    }
+
+    let orderedTracks = [];
+    if (recommender && typeof recommender.recommendTracks === "function") {
+        orderedTracks = recommender.recommendTracks(catalog, {
+            seed: seedTracks,
+            storage: store,
+            mixMode: options.mixMode || activeMixMode || "all",
+            moodFilter: moodFilter || "All",
+            includeSeedTracks: true,
+            limit: catalog.length,
+            now,
+        });
+    }
+    if (orderedTracks.length === 0) {
+        orderedTracks = scored.map((item) => item.track);
+    }
+
+    // Ensure the highest-scoring Supermix lead track is first
+    const leadTrack = seedTracks[0] || orderedTracks[0] || catalog[0];
+    if (leadTrack) {
+        orderedTracks = [
+            leadTrack,
+            ...orderedTracks.filter((t) => t.id !== leadTrack.id),
+        ];
+    }
+
+    const artists = collectDistinctArtists(orderedTracks, 4);
+    const genres = Array.from(new Set(orderedTracks.map((t) => t.genre).filter(Boolean))).slice(0, 3);
+    const moods = Array.from(
+        new Set(orderedTracks.flatMap((t) => (Array.isArray(t.moods) ? t.moods : [])))
+    ).slice(0, 4);
+    const avgBpm = Math.round(
+        orderedTracks.reduce((s, t) => s + Number(t.bpm || 110), 0) /
+            Math.max(1, orderedTracks.length)
+    );
+    const avgEnergyPct = Math.round(
+        (orderedTracks.reduce((s, t) => s + Number(t.energy ?? 0.65), 0) /
+            Math.max(1, orderedTracks.length)) *
+            100
+    );
+    const likedCount = scored.filter((s) => s.ctx.isLiked).length;
+    const playedCount = scored.filter((s) => s.ctx.playCount > 0).length;
+    const collageCovers = collectDistinctCovers(orderedTracks, catalog, 4);
+
+    return {
+        id: "supermix",
+        smartMixId: "supermix",
+        type: "supermix",
+        theme: "supermix",
+        badge: "YT MUSIC SUPERMIX",
+        shortBadge: "SUPERMIX",
+        title: "Your Supermix",
+        vibeTitle:
+            moodFilter && moodFilter !== "All"
+                ? `${moodFilter} Hybrid Supermix`
+                : "All-in-One Hybrid Station",
+        subtitle: `Feat. ${artists.slice(0, 3).join(", ")}${artists.length > 3 ? " & more" : ""}`,
+        description:
+            likedCount > 0 || playedCount > 0
+                ? `Tailored from ${likedCount} liked & ${playedCount} played tracks • ${avgEnergyPct}% Energy • ${avgBpm} BPM`
+                : `Nonstop multi-genre blend across ${genres.join(", ")} • ${avgEnergyPct}% Energy • ${avgBpm} BPM`,
+        coverUrl: leadTrack?.coverUrl || "Images/Espresso.jpeg",
+        collageCovers,
+        artists,
+        genres,
+        moods,
+        avgBpm,
+        avgEnergyPct,
+        likedCount,
+        playedCount,
+        trackCount: orderedTracks.length,
+        tracks: orderedTracks,
+        previewTracks: orderedTracks.slice(0, 4),
+        recommendedMixMode: "all",
+        seedSpec: {
+            type: "supermix",
+            smartMixId: "supermix",
+            badge: "SUPERMIX",
+            label: "Your Nonstop Supermix",
+            tracks: seedTracks,
+        },
+    };
+}
+
+const DAILY_MIX_CLUSTER_PROFILES = [
+    {
+        id: "daily-mix-1",
+        mixNumber: 1,
+        title: "Daily Mix 1",
+        vibeTitle: "Bollywood Romance & Soul",
+        badge: "DAILY MIX 01",
+        shortBadge: "DAILY MIX 1",
+        theme: "daily-1",
+        recommendedMixMode: "familiar",
+        targetGenres: [
+            "bollywood romance",
+            "bollywood soul",
+            "bollywood arabic fusion",
+            "devotional / spiritual",
+        ],
+        targetSubgenres: [
+            "romantic ballad",
+            "sufi romance",
+            "sufi / orchestral",
+            "filmi ballad",
+            "alternative ballad",
+            "acoustic melody",
+            "devotional",
+            "melody",
+        ],
+        targetMoods: ["romantic", "soulful", "melancholic", "peaceful", "nostalgic", "chill"],
+        targetLanguages: ["hindi"],
+        audioMatcher(track) {
+            const acoustic = Number(track.acousticness ?? 0.4);
+            const energy = Number(track.energy ?? 0.6);
+            const bpm = Number(track.bpm ?? 105);
+            return acoustic * 0.45 + (1 - Math.min(1, Math.max(0, energy - 0.35))) * 0.3 + (bpm <= 105 ? 0.25 : 0.05);
+        },
+    },
+    {
+        id: "daily-mix-2",
+        mixNumber: 2,
+        title: "Daily Mix 2",
+        vibeTitle: "Hip-Hop & High-Voltage Trap",
+        badge: "DAILY MIX 02",
+        shortBadge: "DAILY MIX 2",
+        theme: "daily-2",
+        recommendedMixMode: "upbeat",
+        targetGenres: ["hip-hop", "rap", "trap"],
+        targetSubgenres: [
+            "trap",
+            "southern hip-hop",
+            "west coast hip-hop",
+            "hyphy",
+            "psychedelic trap",
+            "alternative rap",
+            "club rap",
+            "hardcore hip-hop",
+            "rap",
+        ],
+        targetMoods: ["hype", "workout", "energetic", "late night", "upbeat"],
+        targetLanguages: ["english"],
+        audioMatcher(track) {
+            const energy = Number(track.energy ?? 0.6);
+            const dance = Number(track.danceability ?? 0.6);
+            const acoustic = Number(track.acousticness ?? 0.3);
+            return energy * 0.5 + dance * 0.3 + (1 - acoustic) * 0.2;
+        },
+    },
+    {
+        id: "daily-mix-3",
+        mixNumber: 3,
+        title: "Daily Mix 3",
+        vibeTitle: "Pop, Punjabi & Feel-Good Grooves",
+        badge: "DAILY MIX 03",
+        shortBadge: "DAILY MIX 3",
+        theme: "daily-3",
+        recommendedMixMode: "all",
+        targetGenres: ["pop", "punjabi pop", "bollywood pop"],
+        targetSubgenres: [
+            "dance pop",
+            "nu-disco",
+            "synth pop",
+            "funk pop",
+            "punjabi",
+            "desi hip-hop",
+            "r&b fusion",
+            "world fusion",
+            "upbeat filmi",
+            "indie pop",
+        ],
+        targetMoods: ["feel good", "party", "happy", "upbeat"],
+        targetLanguages: ["english", "punjabi", "hindi"],
+        audioMatcher(track) {
+            const valence = Number(track.valence ?? 0.6);
+            const dance = Number(track.danceability ?? 0.6);
+            const energy = Number(track.energy ?? 0.6);
+            return valence * 0.45 + dance * 0.35 + energy * 0.2;
+        },
+    },
+];
+
+function scoreTrackForDailyCluster(track, profile) {
+    const genreLower = String(track.genre || "").trim().toLowerCase();
+    const langLower = String(track.language || "").trim().toLowerCase();
+    const subgenresLower = (Array.isArray(track.subgenres) ? track.subgenres : []).map((s) =>
+        String(s).trim().toLowerCase()
+    );
+    const moodsLower = (Array.isArray(track.moods) ? track.moods : []).map((m) =>
+        String(m).trim().toLowerCase()
+    );
+
+    const exactGenreMatch = profile.targetGenres.includes(genreLower);
+    const partialGenreMatch =
+        !exactGenreMatch &&
+        profile.targetGenres.some((tg) => genreLower.includes(tg) || tg.includes(genreLower));
+    const subgenreHits = subgenresLower.filter((sg) => profile.targetSubgenres.includes(sg)).length;
+    const moodHits = moodsLower.filter((m) => profile.targetMoods.includes(m)).length;
+    const langMatch = profile.targetLanguages.includes(langLower);
+    const audioFit = typeof profile.audioMatcher === "function" ? profile.audioMatcher(track) : 0.5;
+
+    const genreScore = exactGenreMatch ? 0.52 : partialGenreMatch ? 0.28 : 0;
+    const subgenreScore = Math.min(0.24, subgenreHits * 0.1);
+    const moodScore = Math.min(0.16, moodHits * 0.05);
+    const langScore = langMatch ? 0.08 : 0;
+    const totalClusterFit = genreScore + subgenreScore + moodScore + langScore + audioFit * 0.18;
+
+    return {
+        isCoreMatch: exactGenreMatch || subgenreHits >= 2,
+        totalClusterFit: Number(totalClusterFit.toFixed(4)),
+    };
+}
+
+/**
+ * Automatically clusters the catalog by genre, artist, language, and sonic vibe
+ * into Spotify-style Daily Mix 1, Daily Mix 2, and Daily Mix 3.
+ */
+function buildDailyMixes(catalogInput, options = {}) {
+    const catalog = Array.isArray(catalogInput) && catalogInput.length > 0 ? catalogInput : songs;
+    if (!catalog.length) return [];
+
+    const store = options.storage !== undefined ? options.storage : getStorage();
+    const recommender = options.recommender !== undefined ? options.recommender : getRecommender();
+    const now = options.now || Date.now();
+    const moodFilter = options.moodFilter !== undefined ? options.moodFilter : activeMoodFilter;
+    const mixTrackLimit = options.limit || Math.min(6, catalog.length);
+
+    // Partition each track into its strongest primary cluster while also allowing sonic expansion
+    const primaryBuckets = new Map(DAILY_MIX_CLUSTER_PROFILES.map((p) => [p.id, []]));
+
+    for (const track of catalog) {
+        let bestProfileId = DAILY_MIX_CLUSTER_PROFILES[0].id;
+        let bestScore = -Infinity;
+        for (const profile of DAILY_MIX_CLUSTER_PROFILES) {
+            const fit = scoreTrackForDailyCluster(track, profile);
+            if (fit.totalClusterFit > bestScore) {
+                bestScore = fit.totalClusterFit;
+                bestProfileId = profile.id;
+            }
+        }
+        primaryBuckets.get(bestProfileId).push(track);
+    }
+
+    const usedLeadTrackIds = new Set();
+
+    return DAILY_MIX_CLUSTER_PROFILES.map((profile) => {
+        const scoredCandidates = catalog.map((track, idx) => {
+            const fit = scoreTrackForDailyCluster(track, profile);
+            const ctx = getTrackTelemetryContext(track, store, now);
+            const isPrimaryBucket = primaryBuckets
+                .get(profile.id)
+                .some((t) => t.id === track.id);
+            const moodChipBoost =
+                moodFilter && moodFilter !== "All" && matchesActiveMoodChip(track, moodFilter)
+                    ? 0.14
+                    : 0;
+            const tasteWeight =
+                ctx.affinityScore * 0.34 +
+                (ctx.isLiked ? 0.2 : 0) +
+                Math.min(0.14, ctx.playCount * 0.05) +
+                Number(track.popularity ?? 0.75) * 0.12 -
+                ctx.skipPenalty * 0.35 -
+                (ctx.isDisliked ? 0.65 : 0);
+
+            const rankScore =
+                fit.totalClusterFit * 0.65 +
+                (isPrimaryBucket ? 0.25 : 0) +
+                tasteWeight +
+                moodChipBoost;
+
+            return {
+                track,
+                idx,
+                fit,
+                ctx,
+                isPrimaryBucket,
+                rankScore: Number(rankScore.toFixed(4)),
+            };
+        });
+
+        scoredCandidates.sort((a, b) => b.rankScore - a.rankScore || a.idx - b.idx);
+
+        let coreTracks = scoredCandidates
+            .filter((item) => item.isPrimaryBucket || item.fit.isCoreMatch)
+            .map((item) => item.track);
+
+        if (coreTracks.length === 0) {
+            coreTracks = scoredCandidates.slice(0, Math.min(3, scoredCandidates.length)).map((i) => i.track);
+        }
+
+        // Ensure each Daily Mix 1–3 has a distinct lead track even on very small catalogs
+        const distinctLead =
+            coreTracks.find((t) => !usedLeadTrackIds.has(t.id)) ||
+            scoredCandidates.map((i) => i.track).find((t) => !usedLeadTrackIds.has(t.id)) ||
+            coreTracks[0];
+        if (distinctLead) {
+            usedLeadTrackIds.add(distinctLead.id);
+            coreTracks = [
+                distinctLead,
+                ...coreTracks.filter((t) => t.id !== distinctLead.id),
+            ];
+        }
+
+        // Expand cluster tracklist with recommender sonic bridges up to mixTrackLimit
+        let expandedTracks = coreTracks.slice();
+        if (expandedTracks.length < mixTrackLimit) {
+            if (recommender && typeof recommender.recommendTracks === "function") {
+                const bridgeTracks = recommender.recommendTracks(catalog, {
+                    seed: coreTracks.slice(0, 3),
+                    excludeTrackIds: coreTracks.map((t) => t.id),
+                    includeSeedTracks: false,
+                    storage: store,
+                    mixMode: profile.recommendedMixMode,
+                    limit: mixTrackLimit - expandedTracks.length,
+                    now,
+                });
+                expandedTracks.push(...bridgeTracks);
+            } else {
+                for (const item of scoredCandidates) {
+                    if (!expandedTracks.some((t) => t.id === item.track.id)) {
+                        expandedTracks.push(item.track);
+                        if (expandedTracks.length >= mixTrackLimit) break;
+                    }
+                }
+            }
+        }
+
+        const mixTracks = expandedTracks.slice(0, mixTrackLimit);
+        const coreArtists = collectDistinctArtists(coreTracks, 4);
+        const genres = Array.from(new Set(coreTracks.map((t) => t.genre).filter(Boolean)));
+        const moods = Array.from(
+            new Set(coreTracks.flatMap((t) => (Array.isArray(t.moods) ? t.moods : [])))
+        ).slice(0, 4);
+        const avgBpm = Math.round(
+            coreTracks.reduce((s, t) => s + Number(t.bpm || 110), 0) /
+                Math.max(1, coreTracks.length)
+        );
+        const avgEnergyPct = Math.round(
+            (coreTracks.reduce((s, t) => s + Number(t.energy ?? 0.65), 0) /
+                Math.max(1, coreTracks.length)) *
+                100
+        );
+        const collageCovers = collectDistinctCovers(coreTracks, mixTracks, 4);
+
+        return {
+            id: profile.id,
+            smartMixId: profile.id,
+            mixNumber: profile.mixNumber,
+            type: "daily-mix",
+            theme: profile.theme,
+            badge: profile.badge,
+            shortBadge: profile.shortBadge,
+            title: profile.title,
+            vibeTitle: profile.vibeTitle,
+            subtitle: `${coreArtists.slice(0, 3).join(", ")}${coreArtists.length > 3 ? " & more" : ""}`,
+            description: `${genres.slice(0, 2).join(" • ") || profile.vibeTitle} • ${avgEnergyPct}% Energy • ${avgBpm} BPM`,
+            coverUrl: distinctLead?.coverUrl || "Images/Espresso.jpeg",
+            collageCovers,
+            artists: coreArtists,
+            genres,
+            moods,
+            avgBpm,
+            avgEnergyPct,
+            coreTrackCount: coreTracks.length,
+            trackCount: mixTracks.length,
+            coreTracks,
+            tracks: mixTracks,
+            previewTracks: mixTracks.slice(0, 4),
+            recommendedMixMode: profile.recommendedMixMode,
+            seedSpec: {
+                type: "daily-mix",
+                smartMixId: profile.id,
+                badge: profile.shortBadge,
+                label: `${profile.title}: ${profile.vibeTitle}`,
+                tracks: coreTracks,
+            },
+        };
+    });
+}
+
+/**
+ * Automatically generates the "On Repeat" shelf:
+ * Surfaces songs with high play counts, full completions, high completion ratios, and likes.
+ */
+function buildOnRepeatShelf(catalogInput, options = {}) {
+    const catalog = Array.isArray(catalogInput) && catalogInput.length > 0 ? catalogInput : songs;
+    const store = options.storage !== undefined ? options.storage : getStorage();
+    const now = options.now || Date.now();
+    const moodFilter = options.moodFilter !== undefined ? options.moodFilter : activeMoodFilter;
+    const limit = options.limit || 6;
+
+    const scored = catalog.map((track, idx) => {
+        const ctx = getTrackTelemetryContext(track, store, now);
+        const popularity = Number(track.popularity ?? 0.75);
+        const moodBoost =
+            moodFilter && moodFilter !== "All" && matchesActiveMoodChip(track, moodFilter)
+                ? 0.15
+                : 0;
+
+        const playBoost = Math.min(
+            0.56,
+            ctx.playCount * 0.16 + ctx.fullCompletions * 0.14
+        );
+        const completionBoost = ctx.avgCompletionRatio * 0.22;
+        const likeBoost = ctx.isLiked ? 0.3 : 0;
+        const basePrior = ctx.affinityScore * 0.24 + popularity * 0.18;
+        const penalty = ctx.skipPenalty * 0.45 + (ctx.isDisliked ? 0.85 : 0);
+
+        const score = Number(
+            (playBoost + completionBoost + likeBoost + basePrior + moodBoost - penalty).toFixed(4)
+        );
+
+        const avgCompletionPct = Math.round(ctx.avgCompletionRatio * 100);
+        let badgeText = "TOP ROTATION";
+        let reasonText = `${Math.round(popularity * 100)}% catalog affinity • ${track.genre || "Music"}`;
+
+        if (ctx.playCount >= 2 || ctx.fullCompletions >= 1) {
+            badgeText = `ON REPEAT • ${ctx.playCount} ${ctx.playCount === 1 ? "PLAY" : "PLAYS"}`;
+            reasonText = `${avgCompletionPct || 100}% completion${ctx.isLiked ? " • ♥ Liked" : ""} • Heavy rotation`;
+        } else if (ctx.isLiked && ctx.playCount === 1) {
+            badgeText = "♥ LIKED • 1 PLAY";
+            reasonText = `Saved favorite • ${avgCompletionPct || 100}% completion`;
+        } else if (ctx.isLiked) {
+            badgeText = "♥ LIKED FAVORITE";
+            reasonText = `Saved in Liked Songs • ${track.genre || "Music"}`;
+        } else if (ctx.playCount === 1) {
+            badgeText = "IN ROTATION • 1 PLAY";
+            reasonText = `Recently spun • ${avgCompletionPct}% completion`;
+        }
+
+        return {
+            track: {
+                ...track,
+                shelfMeta: {
+                    shelfId: "on-repeat",
+                    score,
+                    badgeText,
+                    reasonText,
+                    playCount: ctx.playCount,
+                    fullCompletions: ctx.fullCompletions,
+                    avgCompletionPct,
+                    isLiked: ctx.isLiked,
+                },
+            },
+            ctx,
+            score,
+            idx,
+        };
+    });
+
+    scored.sort((a, b) => b.score - a.score || b.ctx.playCount - a.ctx.playCount || a.idx - b.idx);
+
+    const selectedTracks = scored.slice(0, limit).map((item) => item.track);
+    const totalPlaysInShelf = scored.reduce((s, item) => s + item.ctx.playCount, 0);
+    const totalLikedInShelf = scored.filter((item) => item.ctx.isLiked).length;
+
+    return {
+        id: "on-repeat",
+        type: "shelf",
+        title: "On Repeat",
+        eyebrow: "HEAVY ROTATION • HIGH AFFINITY",
+        subtitle:
+            totalPlaysInShelf > 0 || totalLikedInShelf > 0
+                ? `${totalPlaysInShelf} total plays & ${totalLikedInShelf} liked favorites in heavy rotation`
+                : "Your highest-affinity rotation picks & signature anthems",
+        tracks: selectedTracks,
+        seedSpec: {
+            type: "on-repeat",
+            smartMixId: "on-repeat",
+            badge: "ON REPEAT MIX",
+            label: "On Repeat Heavy Rotation",
+            tracks: selectedTracks.slice(0, 4),
+        },
+    };
+}
+
+/**
+ * Automatically generates the "Rediscover & Forgotten Favorites" shelf:
+ * Surfaces tracks that were liked or completed in the past (not in the immediate last 1-2 plays)
+ * alongside unplayed hidden gems, classic deep cuts, and overlooked tracks by favorite artists.
+ */
+function buildRediscoverShelf(catalogInput, options = {}) {
+    const catalog = Array.isArray(catalogInput) && catalogInput.length > 0 ? catalogInput : songs;
+    const store = options.storage !== undefined ? options.storage : getStorage();
+    const now = options.now || Date.now();
+    const moodFilter = options.moodFilter !== undefined ? options.moodFilter : activeMoodFilter;
+    const limit = options.limit || 6;
+
+    const rawRecentEntries =
+        store && typeof store.getRecentlyPlayed === "function"
+            ? store.getRecentlyPlayed(20)
+            : [];
+    const sortedRecentNonSkipped = rawRecentEntries
+        .filter((e) => e && e.trackId && e.outcome !== "early-skip")
+        .slice()
+        .sort((a, b) => (b.playedAt || 0) - (a.playedAt || 0));
+    const recentIdsList = [];
+    for (const entry of sortedRecentNonSkipped) {
+        if (!recentIdsList.includes(entry.trackId)) {
+            recentIdsList.push(entry.trackId);
+        }
+    }
+    const immediateRecentIds = new Set(recentIdsList.slice(0, 2));
+
+    // Find artists the user has shown positive affinity for (liked or completed at least once)
+    const favoredArtists = new Set();
+    for (const track of catalog) {
+        const ctx = getTrackTelemetryContext(track, store, now);
+        if (ctx.isLiked || ctx.fullCompletions > 0 || ctx.playCount > 0) {
+            for (const a of getTrackArtistList(track)) {
+                favoredArtists.add(a.toLowerCase());
+            }
+        }
+    }
+
+    const scored = catalog.map((track, idx) => {
+        const ctx = getTrackTelemetryContext(track, store, now);
+        const popularity = Number(track.popularity ?? 0.8);
+        const year = Number(track.year || 2024);
+        const moodsLower = (Array.isArray(track.moods) ? track.moods : []).map((m) =>
+            String(m).toLowerCase()
+        );
+        const isImmediateRecent = immediateRecentIds.has(track.id);
+        const hasFavoredArtist = getTrackArtistList(track).some((a) =>
+            favoredArtists.has(a.toLowerCase())
+        );
+
+        const isDeepCutMood =
+            moodsLower.includes("deep cuts") ||
+            moodsLower.includes("nostalgic") ||
+            moodsLower.includes("soulful") ||
+            moodsLower.includes("peaceful");
+        const hiddenGemBonus = (1 - popularity) * 0.42 + (isDeepCutMood ? 0.2 : 0);
+        const classicEraBonus = year <= 2015 ? 0.22 : year <= 2019 ? 0.16 : year <= 2022 ? 0.1 : 0.03;
+        const moodFilterBoost =
+            moodFilter && moodFilter !== "All" && matchesActiveMoodChip(track, moodFilter)
+                ? 0.15
+                : 0;
+
+        let category = "hidden-gem";
+        let score = 0.4 + hiddenGemBonus + classicEraBonus + moodFilterBoost;
+        let badgeText = "HIDDEN GEM • UNPLAYED";
+        let reasonText = `Unplayed ${track.genre || "catalog"} gem • ${year}`;
+
+        const ageMs = ctx.lastPlayedAt ? Math.max(0, now - ctx.lastPlayedAt) : 0;
+        const ageHours = ageMs / (1000 * 60 * 60);
+        const isForgottenFavorite =
+            (ctx.isLiked || ctx.fullCompletions > 0 || (ctx.playCount > 0 && ctx.avgCompletionRatio >= 0.6)) &&
+            (!isImmediateRecent || ageHours >= 1);
+
+        if (isForgottenFavorite) {
+            category = "forgotten-favorite";
+            const timeElapsedBonus = Math.min(0.28, ageHours * 0.04 + (!isImmediateRecent ? 0.16 : 0));
+            score =
+                0.68 +
+                (ctx.isLiked ? 0.22 : 0) +
+                Math.min(0.18, ctx.fullCompletions * 0.08 + ctx.playCount * 0.04) +
+                timeElapsedBonus +
+                moodFilterBoost -
+                ctx.skipPenalty * 0.4;
+            badgeText = ctx.isLiked ? "FORGOTTEN FAVORITE • ♥" : "FORGOTTEN FAVORITE";
+            reasonText =
+                ctx.playCount > 0
+                    ? `Played ${ctx.playCount}x earlier • Ready to rediscover`
+                    : `Liked favorite waiting for a spin • ${track.album}`;
+        } else if (ctx.playCount === 0) {
+            if (hasFavoredArtist) {
+                category = "artist-discovery";
+                score += 0.2;
+                badgeText = "UNPLAYED • FAVORITE ARTIST";
+                reasonText = `More by ${track.primaryArtist} you haven't played yet`;
+            } else if (year <= 2019 || isDeepCutMood) {
+                category = "classic-deep-cut";
+                badgeText = `DEEP CUT • ${year}`;
+                reasonText = `${track.album} (${year}) • ${isDeepCutMood ? "Deep Cuts vibe" : track.genre}`;
+            }
+        } else if (isImmediateRecent) {
+            // Recently played just now belongs in Jump Back In, so deprioritize in Rediscover
+            score -= 0.38;
+            badgeText = `REVISIT • ${year}`;
+            reasonText = `${track.album} • ${track.genre}`;
+        }
+
+        if (ctx.isDisliked || ctx.skipPenalty >= 0.45) {
+            score -= 0.75;
+        }
+
+        score = Number(score.toFixed(4));
+
+        return {
+            track: {
+                ...track,
+                shelfMeta: {
+                    shelfId: "rediscover",
+                    category,
+                    score,
+                    badgeText,
+                    reasonText,
+                    playCount: ctx.playCount,
+                    isLiked: ctx.isLiked,
+                },
+            },
+            ctx,
+            score,
+            idx,
+        };
+    });
+
+    scored.sort((a, b) => b.score - a.score || a.idx - b.idx);
+    const selectedTracks = scored.slice(0, limit).map((item) => item.track);
+    const forgottenCount = selectedTracks.filter(
+        (t) => t.shelfMeta?.category === "forgotten-favorite"
+    ).length;
+    const unplayedCount = selectedTracks.filter((t) => (t.shelfMeta?.playCount || 0) === 0).length;
+
+    return {
+        id: "rediscover",
+        type: "shelf",
+        title: "Rediscover & Forgotten Favorites",
+        eyebrow: "DEEP CUTS • FORGOTTEN FAVORITES",
+        subtitle:
+            forgottenCount > 0
+                ? `${forgottenCount} forgotten ${forgottenCount === 1 ? "favorite" : "favorites"} & ${unplayedCount} unplayed ${unplayedCount === 1 ? "gem" : "gems"}`
+                : `Unplayed catalog deep cuts & nostalgic classics (${unplayedCount} waiting to be discovered)`,
+        tracks: selectedTracks,
+        seedSpec: {
+            type: "rediscover",
+            smartMixId: "rediscover",
+            badge: "REDISCOVER MIX",
+            label: "Rediscover & Forgotten Favorites",
+            tracks: selectedTracks.slice(0, 4),
+        },
+    };
+}
+
+function formatRelativeRecencyBadge(playedAt, now = Date.now()) {
+    if (!Number.isFinite(playedAt) || playedAt <= 0) return "RECENT SESSION";
+    const diffSec = Math.max(0, Math.round((now - playedAt) / 1000));
+    if (diffSec < 90) return "JUST PLAYED";
+    const diffMin = Math.floor(diffSec / 60);
+    if (diffMin < 60) return `PLAYED ${diffMin}M AGO`;
+    const diffHr = Math.floor(diffMin / 60);
+    if (diffHr < 24) return `PLAYED ${diffHr}H AGO`;
+    const diffDays = Math.floor(diffHr / 24);
+    return `PLAYED ${diffDays}D AGO`;
+}
+
+/**
+ * Automatically generates the "Jump Back In" shelf:
+ * Surfaces the user's most recent listening sessions from `SpotTubeStorage.getRecentlyPlayed()`,
+ * active playback track, and high-affinity quick-resume picks across distinct artists and albums.
+ */
+function buildJumpBackInShelf(catalogInput, options = {}) {
+    const catalog = Array.isArray(catalogInput) && catalogInput.length > 0 ? catalogInput : songs;
+    const store = options.storage !== undefined ? options.storage : getStorage();
+    const now = options.now || Date.now();
+    const moodFilter = options.moodFilter !== undefined ? options.moodFilter : activeMoodFilter;
+    const limit = options.limit || 6;
+
+    const rawRecentHistory =
+        store && typeof store.getRecentlyPlayed === "function"
+            ? store.getRecentlyPlayed(40)
+            : [];
+    const recentHistory = rawRecentHistory
+        .slice()
+        .sort((a, b) => (b.playedAt || 0) - (a.playedAt || 0));
+
+    const jumpTracks = [];
+    const seenTrackIds = new Set();
+
+    // 1. Add unique tracks from `recentlyPlayed` (most recent timestamp first, skipping early-skipped tracks)
+    for (const entry of recentHistory) {
+        if (!entry || !entry.trackId || seenTrackIds.has(entry.trackId)) continue;
+        const track = catalog.find((t) => t.id === entry.trackId);
+        if (!track) continue;
+        if (
+            moodFilter &&
+            moodFilter !== "All" &&
+            !matchesActiveMoodChip(track, moodFilter) &&
+            catalog.some((t) => matchesActiveMoodChip(t, moodFilter))
+        ) {
+            continue;
+        }
+        const ctx = getTrackTelemetryContext(track, store, now);
+        if (ctx.isDisliked) continue;
+        if (entry.outcome === "early-skip" && ctx.fullCompletions === 0 && !ctx.isLiked) {
+            continue;
+        }
+
+        const completionPct = Math.round(
+            Number(entry.completionRatio ?? ctx.lastCompletionRatio ?? 1) * 100
+        );
+        const recencyBadge = formatRelativeRecencyBadge(entry.playedAt, now);
+        const reasonText =
+            entry.outcome === "completed" || completionPct >= 85
+                ? `Completed ${completionPct}% • ${track.album}`
+                : `Recent session (${completionPct}%) • ${track.album}`;
+
+        seenTrackIds.add(track.id);
+        jumpTracks.push({
+            ...track,
+            shelfMeta: {
+                shelfId: "jump-back-in",
+                isFromHistory: true,
+                playedAt: entry.playedAt || ctx.lastPlayedAt,
+                outcome: entry.outcome || "played",
+                completionPct,
+                badgeText: recencyBadge,
+                reasonText,
+            },
+        });
+        if (jumpTracks.length >= limit) break;
+    }
+
+    // 2. If activePlaybackTrackId or current active track is not yet in jumpTracks, include it
+    const currentActive = catalog.find((t) => t.id === activePlaybackTrackId) || songs[currentTrackIndex];
+    if (
+        currentActive &&
+        !seenTrackIds.has(currentActive.id) &&
+        jumpTracks.length < limit &&
+        matchesActiveMoodChip(currentActive, moodFilter)
+    ) {
+        const ctx = getTrackTelemetryContext(currentActive, store, now);
+        if (ctx.playCount > 0 || activePlaybackTrackId === currentActive.id) {
+            seenTrackIds.add(currentActive.id);
+            jumpTracks.unshift({
+                ...currentActive,
+                shelfMeta: {
+                    shelfId: "jump-back-in",
+                    isFromHistory: true,
+                    playedAt: ctx.lastPlayedAt || now,
+                    outcome: "active",
+                    completionPct: Math.round((ctx.avgCompletionRatio || 1) * 100),
+                    badgeText: "NOW IN SESSION",
+                    reasonText: `Active deck • ${currentActive.album} (${currentActive.year || 2024})`,
+                },
+            });
+        }
+    }
+
+    // 3. Fill remaining slots up to `limit` with liked songs and distinct-artist quick-resume picks
+    if (jumpTracks.length < limit) {
+        const fallbackCandidates = catalog
+            .filter((t) => !seenTrackIds.has(t.id) && matchesActiveMoodChip(t, moodFilter))
+            .map((track, idx) => {
+                const ctx = getTrackTelemetryContext(track, store, now);
+                const score =
+                    (ctx.isLiked ? 0.35 : 0) +
+                    (ctx.lastPlayedAt ? 0.3 : 0) +
+                    ctx.affinityScore * 0.25 +
+                    Number(track.popularity ?? 0.75) * 0.15 -
+                    (ctx.isDisliked ? 0.8 : 0);
+                return { track, ctx, score, idx };
+            })
+            .sort((a, b) => b.score - a.score || a.idx - b.idx);
+
+        const seenFallbackArtists = new Set(
+            jumpTracks.map((t) => String(t.primaryArtist || "").toLowerCase())
+        );
+
+        for (const item of fallbackCandidates) {
+            if (jumpTracks.length >= limit) break;
+            const artistKey = String(item.track.primaryArtist || "").toLowerCase();
+            if (seenFallbackArtists.has(artistKey) && fallbackCandidates.length > limit) {
+                continue;
+            }
+            seenFallbackArtists.add(artistKey);
+            seenTrackIds.add(item.track.id);
+            jumpTracks.push({
+                ...item.track,
+                shelfMeta: {
+                    shelfId: "jump-back-in",
+                    isFromHistory: Boolean(item.ctx.lastPlayedAt),
+                    playedAt: item.ctx.lastPlayedAt || null,
+                    outcome: item.ctx.isLiked ? "liked" : "ready",
+                    completionPct: Math.round((item.ctx.avgCompletionRatio || 0) * 100),
+                    badgeText: item.ctx.lastPlayedAt
+                        ? formatRelativeRecencyBadge(item.ctx.lastPlayedAt, now)
+                        : item.ctx.isLiked
+                          ? "♥ SAVED VIBES"
+                          : `JUMP IN • ${(item.track.genre || "MIX").toUpperCase()}`,
+                    reasonText: `${item.track.album} (${item.track.year || 2024}) • ${item.track.bpm || 110} BPM`,
+                },
+            });
+        }
+    }
+
+    const historyCount = jumpTracks.filter((t) => t.shelfMeta?.isFromHistory).length;
+
+    return {
+        id: "jump-back-in",
+        type: "shelf",
+        title: "Jump Back In",
+        eyebrow: "RECENT SESSIONS • INSTANT RESUME",
+        subtitle:
+            historyCount > 0
+                ? `Pick up right where you left off (${historyCount} recent ${historyCount === 1 ? "session" : "sessions"})`
+                : "Instant one-click resume across your top artists, albums, and vibes",
+        hasRecentHistory: historyCount > 0,
+        tracks: jumpTracks.slice(0, limit),
+        seedSpec: {
+            type: "jump-back-in",
+            smartMixId: "jump-back-in",
+            badge: "JUMP BACK IN",
+            label: "Jump Back In Radio",
+            tracks: jumpTracks.slice(0, 4),
+        },
+    };
+}
+
+/**
+ * Master builder for all Item 10 Home Dashboard Smart Auto-Mixes & Personalized Shelves:
+ * - `supermix` (*Your Supermix*)
+ * - `dailyMixes` (*Daily Mix 1–3*, clustered by genre/artist/vibe)
+ * - `jumpBackIn` (*Jump Back In*)
+ * - `onRepeat` (*On Repeat*)
+ * - `rediscover` (*Rediscover / Forgotten Favorites*)
+ */
+function buildHomeShelvesData(options = {}) {
+    const catalog =
+        Array.isArray(options.catalog) && options.catalog.length > 0 ? options.catalog : songs;
+    if (!catalog.length) {
+        return {
+            moodFilter: activeMoodFilter,
+            supermix: null,
+            dailyMixes: [],
+            smartMixes: [],
+            jumpBackIn: null,
+            onRepeat: null,
+            rediscover: null,
+            shelves: [],
+        };
+    }
+
+    const supermix = buildSupermixData(catalog, options);
+    const dailyMixes = buildDailyMixes(catalog, options);
+    const smartMixes = [supermix, ...dailyMixes].filter(Boolean);
+    const jumpBackIn = buildJumpBackInShelf(catalog, options);
+    const onRepeat = buildOnRepeatShelf(catalog, options);
+    const rediscover = buildRediscoverShelf(catalog, options);
+
+    const data = {
+        moodFilter: options.moodFilter !== undefined ? options.moodFilter : activeMoodFilter,
+        supermix,
+        dailyMixes,
+        smartMixes,
+        jumpBackIn,
+        onRepeat,
+        rediscover,
+        shelves: [
+            {
+                id: "smart-mixes",
+                type: "smart-mixes",
+                title: "Your Supermix & Daily Mixes",
+                items: smartMixes,
+            },
+            jumpBackIn,
+            onRepeat,
+            rediscover,
+        ].filter(Boolean),
+    };
+
+    activeHomeShelvesData = data;
+    return data;
+}
+
+/**
+ * Starts an endless radio mix from any Smart Auto-Mix or Home Shelf ID
+ * (`"supermix"`, `"daily-mix-1"`, `"daily-mix-2"`, `"daily-mix-3"`, `"on-repeat"`, `"rediscover"`, `"jump-back-in"`).
+ */
+function startSmartMix(mixIdOrSpec = "supermix", options = {}) {
+    if (!songs.length) return null;
+    const shelvesData = buildHomeShelvesData(options);
+
+    let targetMix = null;
+    if (typeof mixIdOrSpec === "string") {
+        const cleanId = mixIdOrSpec.trim().toLowerCase();
+        targetMix =
+            shelvesData.smartMixes.find((m) => m.id.toLowerCase() === cleanId) ||
+            (cleanId === "on-repeat" ? shelvesData.onRepeat : null) ||
+            (cleanId === "rediscover" || cleanId === "forgotten-favorites"
+                ? shelvesData.rediscover
+                : null) ||
+            (cleanId === "jump-back-in" ? shelvesData.jumpBackIn : null) ||
+            shelvesData.supermix;
+    } else if (mixIdOrSpec && typeof mixIdOrSpec === "object") {
+        if (mixIdOrSpec.seedSpec) {
+            targetMix = mixIdOrSpec;
+        } else if (mixIdOrSpec.id || mixIdOrSpec.smartMixId) {
+            const cleanId = String(mixIdOrSpec.id || mixIdOrSpec.smartMixId)
+                .trim()
+                .toLowerCase();
+            targetMix =
+                shelvesData.smartMixes.find((m) => m.id.toLowerCase() === cleanId) ||
+                (cleanId === "on-repeat" ? shelvesData.onRepeat : null) ||
+                (cleanId === "rediscover" ? shelvesData.rediscover : null) ||
+                (cleanId === "jump-back-in" ? shelvesData.jumpBackIn : null) ||
+                { seedSpec: mixIdOrSpec };
+        } else {
+            targetMix = { seedSpec: mixIdOrSpec };
+        }
+    }
+
+    if (!targetMix) {
+        return startRadioMix({ type: "supermix" }, options);
+    }
+
+    if (options.applyRecommendedMixMode && targetMix.recommendedMixMode) {
+        activeMixMode = normalizeMixMode(targetMix.recommendedMixMode);
+    }
+
+    const result = startRadioMix(targetMix.seedSpec || { type: "supermix" }, {
+        ...options,
+        mixMode: options.mixMode || activeMixMode,
+    });
+    renderHomeShelves();
+    return result;
+}
+
+function createSmartMixCardNode(mix, activeMixSession = null) {
+    const card = document.createElement("article");
+    const isActiveStation =
+        activeMixSession &&
+        (activeMixSession.smartMixId === mix.id ||
+            (mix.id === "supermix" && activeMixSession.type === "supermix"));
+
+    card.className = isActiveStation
+        ? "smart-mix-card active-mix-station"
+        : "smart-mix-card";
+    if (card.classList && typeof card.classList.add === "function") {
+        card.classList.add("smart-mix-card");
+        if (isActiveStation) {
+            card.classList.add("active-mix-station");
+        }
+    }
+    card.setAttribute("role", "listitem");
+    card.id = `smart-mix-card-${mix.id}`;
+    card.dataset.smartMixId = mix.id;
+    card.dataset.mixType = mix.type;
+    card.dataset.mixTheme = mix.theme || "supermix";
+
+    const covers = Array.isArray(mix.collageCovers) && mix.collageCovers.length > 0
+        ? mix.collageCovers.slice(0, 4)
+        : [mix.coverUrl || "Images/Espresso.jpeg"];
+    while (covers.length < 4) {
+        covers.push(covers[0]);
+    }
+
+    const previewButtonsHtml = (mix.previewTracks || [])
+        .slice(0, 4)
+        .map(
+            (t) =>
+                `<button type="button" class="smart-mix-preview-track" data-preview-track-id="${t.id}" title="Play ${t.title} in ${mix.title}">${t.title}</button>`
+        )
+        .join("");
+
+    card.innerHTML = `
+        <div class="smart-mix-top-row">
+            <div class="smart-mix-collage" aria-hidden="true">
+                ${covers.map((src, i) => `<img src="${src}" alt="${mix.title} cover ${i + 1}">`).join("")}
+            </div>
+            <div class="smart-mix-badges-col">
+                <span class="smart-mix-badge">${mix.badge}</span>
+                <span class="smart-mix-telemetry-pill">${mix.avgEnergyPct}% Energy &bull; ${mix.avgBpm} BPM</span>
+            </div>
+        </div>
+        <div class="smart-mix-body">
+            <h3 class="smart-mix-title">${mix.title}</h3>
+            <span class="smart-mix-vibe">${mix.vibeTitle}</span>
+            <p class="smart-mix-artists">${mix.subtitle}</p>
+        </div>
+        <div class="smart-mix-preview-list" role="group" aria-label="Featured tracks in ${mix.title}">
+            ${previewButtonsHtml}
+        </div>
+        <div class="smart-mix-actions">
+            <button type="button" class="smart-mix-start-btn" data-smart-mix-action="start-mix" aria-label="Start ${mix.title}">
+                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="m7.05 3.606 13.49 7.788a.7.7 0 0 1 0 1.212L7.05 20.394A.7.7 0 0 1 6 19.788V4.212a.7.7 0 0 1 1.05-.606z"/></svg>
+                <span>Start ${mix.id === "supermix" ? "Supermix" : `Mix ${mix.mixNumber || ""}`.trim()}</span>
+            </button>
+            <button type="button" class="smart-mix-queue-btn" data-smart-mix-action="queue-mix" title="Add ${mix.title} tracks to queue" aria-label="Queue ${mix.title}">
+                <span>+ Queue</span>
+            </button>
+        </div>
+    `;
+
+    if (typeof card.querySelectorAll === "function") {
+        card.querySelectorAll("[data-preview-track-id]").forEach((btn) => {
+            btn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const previewTrackId = btn.dataset.previewTrackId;
+                startSmartMix(mix.id, { startTrack: previewTrackId });
+            });
+        });
+
+        card.querySelectorAll("[data-smart-mix-action]").forEach((btn) => {
+            btn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const action = btn.dataset.smartMixAction;
+                if (action === "start-mix") {
+                    startSmartMix(mix.id);
+                } else if (action === "queue-mix") {
+                    for (const t of (mix.tracks || []).slice(0, 5)) {
+                        addTrackToQueue(t.id);
+                    }
+                }
+            });
+        });
+    }
+
+    card.addEventListener("click", () => {
+        startSmartMix(mix.id);
+    });
+
+    return card;
+}
+
+function createShelfTrackCardNode(track, shelfId) {
+    const card = document.createElement("article");
+    const activeTrack = songs[currentTrackIndex];
+    const isPlaying = activeTrack && activeTrack.id === track.id;
+    const meta = track.shelfMeta || {};
+
+    card.className = isPlaying
+        ? "shelf-track-card active-track"
+        : "shelf-track-card";
+    if (card.classList && typeof card.classList.add === "function") {
+        card.classList.add("shelf-track-card");
+        if (isPlaying) {
+            card.classList.add("active-track");
+        }
+    }
+    card.setAttribute("role", "listitem");
+    card.dataset.trackId = track.id;
+    card.dataset.shelfId = shelfId;
+    card.dataset.artist = track.primaryArtist;
+    card.dataset.album = track.album;
+
+    const badgeText = meta.badgeText || `${track.genre || "Music"} • ${track.bpm || 110} BPM`;
+    const reasonText =
+        meta.reasonText ||
+        `${track.album} (${track.year || 2024}) • ${Math.round((track.energy ?? 0.65) * 100)}% Energy`;
+
+    card.innerHTML = `
+        <div class="shelf-card-top">
+            <img src="${track.coverUrl}" alt="${track.title}" class="shelf-card-cover">
+            <div class="shelf-card-headings">
+                <span class="shelf-card-pill">${badgeText}</span>
+                <h4 class="shelf-card-title" data-open-song="${track.id}" title="View Song Details: ${track.title}">${track.title}</h4>
+                <div class="shelf-card-artist">
+                    <button type="button" class="detail-inline-link" data-open-artist="${track.primaryArtist}" title="Open Artist: ${track.primaryArtist}">${track.artistDisplay}</button>
+                </div>
+            </div>
+        </div>
+        <p class="shelf-card-reason" title="${reasonText}">${reasonText}</p>
+        <div class="card-quick-actions" role="group" aria-label="Shelf actions for ${track.title}">
+            <button type="button" class="card-action-btn" data-shelf-action="play" title="Play ${track.title}">
+                <span>Play</span>
+            </button>
+            <button type="button" class="card-action-btn" data-shelf-action="play-next" title="Play ${track.title} Next">
+                <span>Play Next</span>
+            </button>
+            <button type="button" class="card-action-btn" data-shelf-action="add-to-queue" title="Add ${track.title} to Queue">
+                <span>+ Queue</span>
+            </button>
+            <button type="button" class="card-action-btn mix-action-btn" data-shelf-action="start-mix" title="Start Radio Mix from ${track.title}">
+                <span>Mix</span>
+            </button>
+        </div>
+    `;
+
+    const songHeading = card.querySelector("[data-open-song]");
+    if (songHeading && typeof songHeading.addEventListener === "function") {
+        songHeading.addEventListener("click", (e) => {
+            e.stopPropagation();
+            openSongDetail(track.id);
+        });
+    }
+
+    const artistBtn = card.querySelector("[data-open-artist]");
+    if (artistBtn && typeof artistBtn.addEventListener === "function") {
+        artistBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            openArtistDetail(track.primaryArtist);
+        });
+    }
+
+    if (typeof card.querySelectorAll === "function") {
+        card.querySelectorAll("[data-shelf-action]").forEach((btn) => {
+            btn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const action = btn.dataset.shelfAction;
+                if (action === "play") {
+                    playMusic(track.id, false);
+                } else if (action === "play-next") {
+                    playTrackNext(track.id);
+                } else if (action === "add-to-queue") {
+                    addTrackToQueue(track.id);
+                } else if (action === "start-mix") {
+                    startRadioMix({ type: "track", track });
+                }
+            });
+        });
+    }
+
+    card.addEventListener("click", () => {
+        playMusic(track.id, false);
+    });
+
+    return card;
+}
+
+/**
+ * Renders the Home Dashboard Smart Auto-Mixes & Personalized Shelves (`#home-shelves`):
+ * 1. *Your Supermix* & *Daily Mix 1–3* (`#smart-mixes-grid`)
+ * 2. *Jump Back In* (`#jump-back-in-grid`)
+ * 3. *On Repeat* (`#on-repeat-grid`)
+ * 4. *Rediscover / Forgotten Favorites* (`#rediscover-grid`)
+ */
+function renderHomeShelves(options = {}) {
+    if (!songs.length) return null;
+    const data = options.data || buildHomeShelvesData(options);
+    const qm = getQueueManager();
+    const activeMixSession =
+        qm && typeof qm.getMixSession === "function" ? qm.getMixSession() : null;
+
+    const smartMixesGrid = document.getElementById("smart-mixes-grid");
+    const smartMixesMeta = document.getElementById("shelf-smart-mixes-meta");
+    if (smartMixesMeta) {
+        smartMixesMeta.textContent =
+            activeMoodFilter !== "All"
+                ? `4 stations tuned for ${activeMoodFilter}`
+                : `${data.smartMixes.length} personalized stations`;
+    }
+    if (smartMixesGrid && typeof smartMixesGrid.replaceChildren === "function") {
+        const mixCardNodes = data.smartMixes.map((mix) =>
+            createSmartMixCardNode(mix, activeMixSession)
+        );
+        smartMixesGrid.replaceChildren(...mixCardNodes);
+    }
+
+    const jumpBackInGrid = document.getElementById("jump-back-in-grid");
+    const jumpBackInMeta = document.getElementById("shelf-jump-back-in-meta");
+    if (jumpBackInMeta && data.jumpBackIn) {
+        jumpBackInMeta.textContent = data.jumpBackIn.subtitle;
+    }
+    if (jumpBackInGrid && data.jumpBackIn && typeof jumpBackInGrid.replaceChildren === "function") {
+        const jumpNodes = data.jumpBackIn.tracks.map((t) =>
+            createShelfTrackCardNode(t, "jump-back-in")
+        );
+        jumpBackInGrid.replaceChildren(...jumpNodes);
+    }
+
+    const onRepeatGrid = document.getElementById("on-repeat-grid");
+    const onRepeatMeta = document.getElementById("shelf-on-repeat-meta");
+    if (onRepeatMeta && data.onRepeat) {
+        onRepeatMeta.textContent = data.onRepeat.subtitle;
+    }
+    if (onRepeatGrid && data.onRepeat && typeof onRepeatGrid.replaceChildren === "function") {
+        const repeatNodes = data.onRepeat.tracks.map((t) =>
+            createShelfTrackCardNode(t, "on-repeat")
+        );
+        onRepeatGrid.replaceChildren(...repeatNodes);
+    }
+
+    const rediscoverGrid = document.getElementById("rediscover-grid");
+    const rediscoverMeta = document.getElementById("shelf-rediscover-meta");
+    if (rediscoverMeta && data.rediscover) {
+        rediscoverMeta.textContent = data.rediscover.subtitle;
+    }
+    if (rediscoverGrid && data.rediscover && typeof rediscoverGrid.replaceChildren === "function") {
+        const rediscoverNodes = data.rediscover.tracks.map((t) =>
+            createShelfTrackCardNode(t, "rediscover")
+        );
+        rediscoverGrid.replaceChildren(...rediscoverNodes);
+    }
+
+    const homeShelvesContainer = document.getElementById("home-shelves");
+    if (homeShelvesContainer) {
+        homeShelvesContainer.dataset.shelfCount = String(data.shelves.length);
+        homeShelvesContainer.dataset.activeMood = activeMoodFilter;
+    }
+
+    return data;
+}
+
 function setMoodFilter(mood) {
     activeMoodFilter = mood || "All";
     document.querySelectorAll("#mood-chips-bar .mood-chip").forEach((chip) => {
@@ -4351,6 +5719,7 @@ function setMoodFilter(mood) {
     }
     pushNavState();
     renderCatalogGrid();
+    renderHomeShelves();
     if (activeView === "search") {
         renderSearchView(buildOmniSearchResults(activeSearchQuery));
     }
@@ -5116,6 +6485,22 @@ function initShellControls() {
         }
     }
 
+    // 8b. Home Dashboard Shelf-Header Smart Mix Triggers (Item 10)
+    const shelfMixTriggers = [
+        { id: "shelf-supermix-btn", mixId: "supermix" },
+        { id: "shelf-jump-back-in-mix-btn", mixId: "jump-back-in" },
+        { id: "shelf-on-repeat-mix-btn", mixId: "on-repeat" },
+        { id: "shelf-rediscover-mix-btn", mixId: "rediscover" },
+    ];
+    for (const { id, mixId } of shelfMixTriggers) {
+        const el = document.getElementById(id);
+        if (el) {
+            el.addEventListener("click", () => {
+                startSmartMix(mixId);
+            });
+        }
+    }
+
     const clearManualBtn = document.getElementById("clear-manual-queue-btn");
     if (clearManualBtn) {
         clearManualBtn.addEventListener("click", () => {
@@ -5304,6 +6689,7 @@ async function main() {
     }
 
     renderCatalogGrid();
+    renderHomeShelves();
     renderLibrarySidebar();
     initShellControls();
     playMusic(0, true);
@@ -5504,6 +6890,14 @@ window.SpotTubeShell = {
     setSearchCategory,
     startSearchMix,
     playTopSearchResult,
+    buildSupermixData,
+    buildDailyMixes,
+    buildOnRepeatShelf,
+    buildRediscoverShelf,
+    buildJumpBackInShelf,
+    buildHomeShelvesData,
+    renderHomeShelves,
+    startSmartMix,
     navigateBack,
     navigateForward,
     getState: () => ({
@@ -5513,6 +6907,7 @@ window.SpotTubeShell = {
         activeSearchQuery,
         activeSearchCategory,
         activeSearchResults,
+        activeHomeShelvesData,
         activeLibraryFilter,
         activeMixMode,
         isDrawerOpen,
