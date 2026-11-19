@@ -22,11 +22,67 @@
     }
 })(typeof globalThis !== "undefined" ? globalThis : typeof window !== "undefined" ? window : this, function (globalScope) {
     const VALID_SEED_TYPES = ["track", "artist", "album", "mood", "search", "supermix", "playlist"];
+    const VALID_MIX_MODES = ["all", "familiar", "discover", "deep-cuts", "upbeat", "chill"];
+
+    const MIX_MODE_PROFILES = {
+        all: {
+            id: "all",
+            label: "All",
+            shortLabel: "Balanced",
+            badge: "HYBRID MIX",
+            description: "Balanced blend of your favorites, sonic matches, and fresh picks",
+        },
+        familiar: {
+            id: "familiar",
+            label: "Familiar",
+            shortLabel: "Familiar",
+            badge: "FAMILIAR MIX",
+            description: "Prioritizes your liked songs, high-completion favorites, and signature hits",
+        },
+        discover: {
+            id: "discover",
+            label: "Discover",
+            shortLabel: "Discover",
+            badge: "DISCOVER MIX",
+            description: "Surfaces unplayed tracks, new artists, and sonic bridges outside your usual loop",
+        },
+        "deep-cuts": {
+            id: "deep-cuts",
+            label: "Deep Cuts",
+            shortLabel: "Deep Cuts",
+            badge: "DEEP CUTS",
+            description: "Digs into lower-popularity hidden gems, B-sides, and niche subgenres",
+        },
+        upbeat: {
+            id: "upbeat",
+            label: "Upbeat",
+            shortLabel: "Upbeat",
+            badge: "UPBEAT VIBE",
+            description: "Boosts high-energy, danceable, fast-tempo tracks to lift the momentum",
+        },
+        chill: {
+            id: "chill",
+            label: "Chill",
+            shortLabel: "Chill",
+            badge: "CHILL VIBE",
+            description: "Leans into acoustic textures, smooth tempos, and laid-back late-night vibes",
+        },
+    };
 
     function normalizeString(str) {
         return String(str || "")
             .trim()
             .toLowerCase();
+    }
+
+    function normalizeMixMode(mode) {
+        const clean = normalizeString(mode || "all");
+        return VALID_MIX_MODES.includes(clean) ? clean : "all";
+    }
+
+    function getMixModeProfile(mixMode = "all") {
+        const key = normalizeMixMode(mixMode);
+        return MIX_MODE_PROFILES[key] || MIX_MODE_PROFILES.all;
     }
 
     function getDefaultStorage(overrideStorage) {
@@ -339,9 +395,10 @@
      * Applies deterministic mode ordering for explicit YT Music tuning modes
      * (`upbeat`, `chill`, `deep-cuts`, `familiar`, `discover`) while preserving recommendation metadata.
      */
-    function applyMixModeSorting(tracks = [], mixMode = "all", currentTrack = null) {
-        const mode = normalizeString(mixMode || "all");
+    function applyMixModeSorting(tracks = [], mixMode = "all", currentTrack = null, options = {}) {
+        const mode = normalizeMixMode(mixMode);
         const list = tracks.slice();
+        const activeStorage = getDefaultStorage(options.storage);
 
         if (mode === "upbeat") {
             return list.sort(
@@ -364,16 +421,65 @@
                     (b.recommendation?.totalScore || 0) - (a.recommendation?.totalScore || 0)
             );
         }
-        if (!tracks[0]?.recommendation) {
-            if (mode === "familiar") {
+        if (mode === "familiar") {
+            if (!tracks[0]?.recommendation) {
                 return list.sort((a, b) => (b.popularity || 0.5) - (a.popularity || 0.5));
             }
-            if (mode === "discover" && currentTrack) {
+            const getFamiliarScore = (t) => {
+                const stats =
+                    activeStorage && typeof activeStorage.getTrackStats === "function"
+                        ? activeStorage.getTrackStats(t.id)
+                        : null;
+                const likedBonus = stats?.liked ? 0.35 : 0;
+                const playedBonus =
+                    stats?.playCount > 0 ? Math.min(0.25, stats.playCount * 0.08) : 0;
+                const sameArtistBonus =
+                    currentTrack &&
+                    normalizeString(t.primaryArtist) === normalizeString(currentTrack.primaryArtist)
+                        ? 0.22
+                        : 0;
+                const popScore = Number(t.popularity ?? 0.5) * 0.45;
+                const recScore = Number(t.recommendation?.totalScore ?? 0) * 0.55;
+                return likedBonus + playedBonus + sameArtistBonus + popScore + recScore;
+            };
+            return list.sort(
+                (a, b) =>
+                    getFamiliarScore(b) - getFamiliarScore(a) ||
+                    (b.popularity || 0.5) - (a.popularity || 0.5)
+            );
+        }
+        if (mode === "discover") {
+            if (!tracks[0]?.recommendation && currentTrack) {
                 const currentGenre = currentTrack.genre;
                 return list.sort(
                     (a, b) => Number(a.genre === currentGenre) - Number(b.genre === currentGenre)
                 );
             }
+            const getDiscoverScore = (t) => {
+                const stats =
+                    activeStorage && typeof activeStorage.getTrackStats === "function"
+                        ? activeStorage.getTrackStats(t.id)
+                        : null;
+                const playCount = stats ? stats.playCount || 0 : 0;
+                const unplayedBonus = playCount === 0 ? 0.32 : -0.22 * Math.min(3, playCount);
+                const diffArtistBonus =
+                    currentTrack &&
+                    normalizeString(t.primaryArtist) !== normalizeString(currentTrack.primaryArtist)
+                        ? 0.22
+                        : -0.22;
+                const diffGenreBonus =
+                    currentTrack &&
+                    normalizeString(t.genre) !== normalizeString(currentTrack.genre)
+                        ? 0.14
+                        : 0;
+                const recScore = Number(t.recommendation?.totalScore ?? 0.5) * 0.55;
+                return unplayedBonus + diffArtistBonus + diffGenreBonus + recScore;
+            };
+            return list.sort(
+                (a, b) =>
+                    getDiscoverScore(b) - getDiscoverScore(a) ||
+                    (b.recommendation?.totalScore || 0) - (a.recommendation?.totalScore || 0)
+            );
         }
         return list;
     }
@@ -557,7 +663,9 @@
                 }
             }
 
-            const sorted = applyMixModeSorting(recommended, mixMode, currentTrack);
+            const sorted = applyMixModeSorting(recommended, mixMode, currentTrack, {
+                storage: activeStorage,
+            });
             if (Number.isFinite(options.limit) && options.limit > 0) {
                 return sorted.slice(0, options.limit);
             }
@@ -943,30 +1051,109 @@
         }
 
         /**
+         * Computes live queue vibe & tuning metrics for the active mix mode and upcoming queue.
+         */
+        function getQueueVibeMetrics() {
+            const activeRecommender = getDefaultRecommender(recommender);
+            const activeStorage = getDefaultStorage(storage);
+            const upcoming = getUpcomingTracks();
+            if (activeRecommender && typeof activeRecommender.computeQueueVibeMetrics === "function") {
+                return activeRecommender.computeQueueVibeMetrics(upcoming, {
+                    mixMode,
+                    storage: activeStorage,
+                });
+            }
+            const profile = getMixModeProfile(mixMode);
+            if (!upcoming.length) {
+                return {
+                    mixMode: profile.id,
+                    profile,
+                    trackCount: 0,
+                    avgBpm: 0,
+                    avgEnergyPct: 0,
+                    avgAcousticPct: 0,
+                    avgPopularityPct: 0,
+                    discoveryRatioPct: 0,
+                    familiarCount: 0,
+                    deepCutsCount: 0,
+                    summaryText: `${profile.shortLabel} • ${profile.description}`,
+                };
+            }
+            const n = upcoming.length;
+            const avgBpm = Math.round(upcoming.reduce((s, t) => s + Number(t.bpm || 110), 0) / n);
+            const avgEnergyPct = Math.round(
+                (upcoming.reduce((s, t) => s + Number(t.energy ?? 0.65), 0) / n) * 100
+            );
+            const avgAcousticPct = Math.round(
+                (upcoming.reduce((s, t) => s + Number(t.acousticness ?? 0.25), 0) / n) * 100
+            );
+            const avgPopularityPct = Math.round(
+                (upcoming.reduce((s, t) => s + Number(t.popularity ?? 0.75), 0) / n) * 100
+            );
+            return {
+                mixMode: profile.id,
+                profile,
+                trackCount: n,
+                avgBpm,
+                avgEnergyPct,
+                avgAcousticPct,
+                avgPopularityPct,
+                discoveryRatioPct: 100,
+                familiarCount: n,
+                deepCutsCount: upcoming.filter((t) => Number(t.popularity ?? 1) <= 0.78).length,
+                summaryText: `${profile.shortLabel} • ${avgEnergyPct}% Energy • ${avgBpm} BPM`,
+            };
+        }
+
+        /**
          * Dynamically switches the YT Music Mix Mode (`all`, `familiar`, `discover`, `deep-cuts`, `upbeat`, `chill`),
          * re-ranking and regenerating upcoming auto-mix tracks while preserving manual queue items and current playback.
          */
         function setMixMode(newMixMode, options = {}) {
-            mixMode = normalizeString(newMixMode || "all") || "all";
+            const previousMixMode = mixMode;
+            mixMode = normalizeMixMode(newMixMode);
+            const profile = getMixModeProfile(mixMode);
 
-            const manualEntries = queue.filter((item) => item.source === "manual");
+            const preservedEntries = queue.filter(
+                (item) =>
+                    item.source === "manual" ||
+                    (options.preserveUserReordered === true && item.userReordered === true)
+            );
             const excludeIds = [
                 ...(currentTrack ? [currentTrack.id] : []),
-                ...manualEntries.map((item) => item.trackId),
+                ...preservedEntries.map((item) => item.trackId),
             ];
 
             const retunedMixTracks = generateMixTracks({
                 excludeTrackIds: excludeIds,
+                seedTracks: options.seedTracks,
             });
 
             const retunedEntries = retunedMixTracks.map((t) =>
                 createQueueEntry(t, { source: "mix" })
             );
 
-            queue = [...manualEntries, ...retunedEntries];
+            queue = [...preservedEntries, ...retunedEntries];
+
+            activeMixSession = {
+                ...activeMixSession,
+                mixMode,
+                tuningProfile: profile,
+                autoplayLabel:
+                    mixMode === "all" ? "Endless Auto" : `${profile.shortLabel} Auto`,
+            };
+
+            const vibeMetrics = getQueueVibeMetrics();
 
             if (!options.silent) {
-                emitChange("set-mix-mode", { mixMode });
+                emitChange("set-mix-mode", {
+                    mixMode,
+                    previousMixMode,
+                    profile,
+                    vibeMetrics,
+                    preservedManualCount: preservedEntries.length,
+                    retunedMixCount: retunedEntries.length,
+                });
             }
             return getQueue();
         }
@@ -1198,8 +1385,16 @@
             return history.slice();
         }
 
+        function getMixMode() {
+            return mixMode;
+        }
+
         function getMixSession() {
-            return { ...activeMixSession };
+            return {
+                ...activeMixSession,
+                mixMode,
+                tuningProfile: getMixModeProfile(mixMode),
+            };
         }
 
         function getState() {
@@ -1210,6 +1405,8 @@
                 upcomingTracks: getUpcomingTracks(),
                 history: getHistory(),
                 mixMode,
+                mixModeProfile: getMixModeProfile(mixMode),
+                vibeMetrics: getQueueVibeMetrics(),
                 moodFilter,
                 autoplay,
                 minQueueSize,
@@ -1249,6 +1446,9 @@
             replenishQueue,
             setMixMode,
             retuneQueue: setMixMode,
+            getMixMode,
+            getMixModeProfile: (targetMode) => getMixModeProfile(targetMode || mixMode),
+            getQueueVibeMetrics,
             setMoodFilter,
             jumpToQueueItem,
             advanceNext,
@@ -1270,6 +1470,10 @@
 
     return {
         VALID_SEED_TYPES,
+        VALID_MIX_MODES,
+        MIX_MODE_PROFILES,
+        normalizeMixMode,
+        getMixModeProfile,
         normalizeMixSeed,
         findTrackInCatalog,
         applyMixModeSorting,

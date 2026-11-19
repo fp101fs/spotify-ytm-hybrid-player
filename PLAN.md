@@ -14,7 +14,7 @@ We are transforming `/Users/iandodge/Documents/Spotify-UI-Clone` from a static H
 - [x] 3. Build the persistent user taste, telemetry & IndexedDB store (`storage.js`): track play counts, completion ratios, skip penalties (early skip vs late skip), likes/dislikes, recently played timestamps, custom playlists, local user-imported audio blobs (via IndexedDB), and real-time Web Audio API analyzer features (RMS energy, bass/treble spectral centroid) cached per track.
 - [x] 4. Build the Hybrid Recommendation & Scoring Engine (`recommender.js`): combine artist/collaborator affinity, genre/album/era clustering, audio feature cosine similarity (energy, tempo, mood, spectral profile), Spotify-style user taste affinity (completion rate + likes - skip decay), and recency/variety anti-repetition penalties.
 - [x] 5. Implement the universal "Start Mix" Radio Generator & Queue Manager (`queue.js`): allow starting a nonstop radio mix from any single track, artist, album, mood chip, or active search result set, maintaining a live queue with manual reorder, "Play Next", "Add to Queue", and removal.
-- [ ] 6. Add YT Music Dynamic Mix Tuning Chips inside the "Up Next / Mix" drawer: allow switching the active radio mix mode on the fly between *All*, *Familiar*, *Discover*, *Deep Cuts*, *Upbeat*, and *Chill*, dynamically re-ranking and regenerating upcoming auto-queued tracks without interrupting current playback.
+- [x] 6. Add YT Music Dynamic Mix Tuning Chips inside the "Up Next / Mix" drawer: allow switching the active radio mix mode on the fly between *All*, *Familiar*, *Discover*, *Deep Cuts*, *Upbeat*, and *Chill*, dynamically re-ranking and regenerating upcoming auto-queued tracks without interrupting current playback.
 - [ ] 7. Implement Continuous Nonstop Playback & Gapless/Crossfade Audio Engine (`player.js`): dual-deck HTML5 Audio + Web Audio API crossfader (configurable 0–12s crossfade), automatic endless queue replenishment when fewer than 3 tracks remain, keyboard shortcuts, and MediaSession API integration.
 - [ ] 8. Build rich Artist, Album, and Song Detail Views with one-click "Start Mix" hero buttons: clicking any artist or album opens a dedicated header view showing top tracks, discography, "Similar in Your Library" recommendations, and a prominent "Start Mix" radio button.
 - [ ] 9. Build Instant Omni-Search with "Start Mix from Search Results": live filtering across songs, artists, albums, and genres/moods as you type, featuring a "Top Result" hero card and a "Start Search Mix" button that turns any search query into an endless tailored radio station.
@@ -188,3 +188,28 @@ We are transforming `/Users/iandodge/Documents/Spotify-UI-Clone` from a static H
   - Dual-deck HTML5 Audio + Web Audio API crossfader (`player.js`) is Item 7.
 - **Testing & verification**:
   - Added `tests/queue.test.js` and ran `npm test` (`node --test tests/*.test.js`): all 24 tests across 5 test files pass.
+
+### 6. YT Music Dynamic Mix Tuning Chips inside the "Up Next / Mix" drawer
+- **Files created/updated**:
+  - `recommender.js` (added `MIX_MODE_PROFILES`, `getMixModeProfile(mixMode)`, `computeQueueVibeMetrics(tracks, options)`, and mode-specific primary recommendation reason badges for *Familiar*, *Discover*, *Deep Cuts*, *Upbeat*, and *Chill*)
+  - `queue.js` (added `VALID_MIX_MODES`, `MIX_MODE_PROFILES`, `normalizeMixMode`, `getMixModeProfile`, `getMixMode()`, `getQueueVibeMetrics()`, taste-aware deterministic sorting for `familiar` and `discover` in `applyMixModeSorting`, and non-disruptive `setMixMode(newMixMode, options)` that preserves `currentTrack` and manual queue items)
+  - `index.html` (added `aria-pressed="true|false"` and tooltips on `#mix-tuning-chips .tuning-chip`, plus `#mix-tuning-insight` with `#mix-tuning-caption` and `#retune-mix-btn`)
+  - `style.css` (added `.mix-tuning-insight`, `.mix-tuning-caption`, `.mix-retune-btn`, and `view-transition-name: match-element` on `.queue-item`)
+  - `script.js` (added `setMixMode`, `retuneRadioMix`, `getQueueVibeMetrics`, `renderMixTuningInsight`, `syncMixTuningChipsUI`, `reorderContainerNodes` using `Element.prototype.moveBefore` with fallback to `append`/`replaceChildren`, View Transition wrapper `runQueueViewTransition`, and Left/Right arrow keyboard navigation on `#mix-tuning-chips`)
+  - `tests/mix-tuning.test.js` (automated test suite verifying all 6 tuning modes, live re-ranking across *All*, *Familiar*, *Discover*, *Deep Cuts*, *Upbeat*, and *Chill*, uninterrupted audio playback, manual queue preservation, `aria-pressed` states, and in-place DOM node reordering via `moveBefore`)
+- **How it works & Key APIs for later steps**:
+  - **6 Dynamic Tuning Modes (`VALID_MIX_MODES`)**:
+    - `"all"`: Balanced hybrid blend (`autoplayLabel: "Endless Auto"`).
+    - `"familiar"`: Boosts liked songs, high-completion favorites, same-artist tracks, and high-popularity signature hits (`autoplayLabel: "Familiar Auto"`).
+    - `"discover"`: Surfaces unplayed (`playCount === 0`) tracks and cross-artist/cross-genre sonic bridges (`autoplayLabel: "Discover Auto"`).
+    - `"deep-cuts"`: Surfaces lower-popularity hidden gems and `"Deep Cuts"` mood tracks (`autoplayLabel: "Deep Cuts Auto"`).
+    - `"upbeat"`: Boosts high-energy, danceable, fast-BPM tracks (`autoplayLabel: "Upbeat Auto"`).
+    - `"chill"`: Leans into high-acousticness, relaxed-BPM, soulful/chill textures (`autoplayLabel: "Chill Auto"`).
+  - **Recommender & Queue Tuning APIs**:
+    - `SpotTubeRecommender.getMixModeProfile(mode)` / `SpotTubeQueue.getMixModeProfile(mode)` -> returns `{ id, label, shortLabel, badge, description, weights }`.
+    - `SpotTubeRecommender.computeQueueVibeMetrics(tracks, { mixMode, storage })` / `SpotTubeQueue.getQueueVibeMetrics()` -> returns `{ mixMode, profile, trackCount, avgBpm, avgEnergyPct, avgAcousticPct, avgPopularityPct, discoveryRatioPct, familiarCount, deepCutsCount, summaryText }`.
+    - `SpotTubeShell.setMixMode(mode, options)` / `SpotTubeShell.retuneRadioMix(options)` -> switches or refreshes the active mix mode on the fly, preserves manual `"Play Next"` / `"Add to Queue"` items at the front of the queue, never pauses/reloads/seeks `currentSong`, reorders existing `.queue-item` DOM nodes in-place via `moveBefore` + View Transitions, updates `#mix-tuning-caption`, and announces the change once in `#queue-live-status` (`role="status"`).
+- **Deferred / Not done yet**:
+  - Continuous Nonstop Playback & Gapless/Crossfade Audio Engine (`player.js`) with dual-deck HTML5 Audio + Web Audio API crossfader, keyboard shortcuts, and MediaSession API is Item 7.
+- **Testing & verification**:
+  - Added `tests/mix-tuning.test.js` and ran `npm test` (`node --test tests/*.test.js`): all 27 tests across 6 test files pass.

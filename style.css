@@ -1268,6 +1268,53 @@ hr {
     font-weight: 700;
 }
 
+.mix-tuning-insight {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 7px 10px;
+    border-radius: 8px;
+    background-color: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border-subtle);
+}
+
+.mix-tuning-caption {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: clip;
+    text-overflow: ellipsis;
+}
+
+.mix-retune-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: var(--radius-pill);
+    border: 1px solid var(--border-subtle);
+    background-color: rgba(255, 255, 255, 0.06);
+    color: var(--text-secondary);
+    font-size: 0.66rem;
+    font-weight: 700;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.mix-retune-btn svg {
+    inline-size: 11px;
+    block-size: 11px;
+}
+
+.mix-retune-btn:hover {
+    background-color: rgba(30, 215, 96, 0.18);
+    color: var(--accent-spotify);
+    border-color: rgba(30, 215, 96, 0.45);
+}
+
 .drawer-section {
     display: flex;
     flex-direction: column;
@@ -1354,6 +1401,7 @@ hr {
     cursor: pointer;
     transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
     position: relative;
+    view-transition-name: match-element;
 }
 
 .queue-item:hover {

@@ -28,6 +28,94 @@
 
     const VALID_MIX_MODES = ["all", "familiar", "discover", "deep-cuts", "upbeat", "chill"];
 
+    const MIX_MODE_PROFILES = {
+        all: {
+            id: "all",
+            label: "All",
+            shortLabel: "Balanced",
+            badge: "HYBRID MIX",
+            description: "Balanced blend of your favorites, sonic matches, and fresh picks",
+            weights: {
+                artistAffinity: 0.22,
+                genreEraCluster: 0.22,
+                audioSimilarity: 0.28,
+                tasteAffinity: 0.28,
+            },
+        },
+        familiar: {
+            id: "familiar",
+            label: "Familiar",
+            shortLabel: "Familiar",
+            badge: "FAMILIAR MIX",
+            description: "Prioritizes your liked songs, high-completion favorites, and signature hits",
+            weights: {
+                artistAffinity: 0.26,
+                genreEraCluster: 0.18,
+                audioSimilarity: 0.20,
+                tasteAffinity: 0.36,
+            },
+        },
+        discover: {
+            id: "discover",
+            label: "Discover",
+            shortLabel: "Discover",
+            badge: "DISCOVER MIX",
+            description: "Surfaces unplayed tracks, new artists, and sonic bridges outside your usual loop",
+            weights: {
+                artistAffinity: 0.10,
+                genreEraCluster: 0.16,
+                audioSimilarity: 0.42,
+                tasteAffinity: 0.32,
+            },
+        },
+        "deep-cuts": {
+            id: "deep-cuts",
+            label: "Deep Cuts",
+            shortLabel: "Deep Cuts",
+            badge: "DEEP CUTS",
+            description: "Digs into lower-popularity hidden gems, B-sides, and niche subgenres",
+            weights: {
+                artistAffinity: 0.18,
+                genreEraCluster: 0.26,
+                audioSimilarity: 0.32,
+                tasteAffinity: 0.24,
+            },
+        },
+        upbeat: {
+            id: "upbeat",
+            label: "Upbeat",
+            shortLabel: "Upbeat",
+            badge: "UPBEAT VIBE",
+            description: "Boosts high-energy, danceable, fast-tempo tracks to lift the momentum",
+            weights: {
+                artistAffinity: 0.16,
+                genreEraCluster: 0.18,
+                audioSimilarity: 0.40,
+                tasteAffinity: 0.26,
+            },
+        },
+        chill: {
+            id: "chill",
+            label: "Chill",
+            shortLabel: "Chill",
+            badge: "CHILL VIBE",
+            description: "Leans into acoustic textures, smooth tempos, and laid-back late-night vibes",
+            weights: {
+                artistAffinity: 0.16,
+                genreEraCluster: 0.20,
+                audioSimilarity: 0.40,
+                tasteAffinity: 0.24,
+            },
+        },
+    };
+
+    function getMixModeProfile(mixMode = "all") {
+        const key = String(mixMode || "all")
+            .trim()
+            .toLowerCase();
+        return MIX_MODE_PROFILES[key] || MIX_MODE_PROFILES.all;
+    }
+
     function clamp(value, min, max) {
         if (!Number.isFinite(value)) return min;
         return Math.max(min, Math.min(max, value));
@@ -804,6 +892,43 @@
      */
     function buildRecommendationReasons(candidate, signals, mixMode) {
         const reasons = [];
+        const mode = normalizeString(mixMode || "all");
+        const moods = Array.isArray(candidate.moods) ? candidate.moods : [];
+
+        // Mode-specific primary reason when an explicit YT Music tuning mode is active
+        if (mode === "familiar") {
+            if (signals.taste.liked) {
+                reasons.push("Familiar • Liked Song");
+            } else if (signals.taste.playCount > 0 && signals.taste.avgCompletionRatio >= 0.75) {
+                reasons.push("Familiar • High-completion favorite");
+            } else if (signals.artist.score >= 0.75) {
+                reasons.push(`Familiar • ${candidate.primaryArtist} favorite`);
+            } else if ((candidate.popularity || 0) >= 0.85) {
+                reasons.push("Familiar • Signature hit");
+            }
+        } else if (mode === "discover") {
+            if (signals.taste.playCount === 0 && signals.artist.score < 0.75) {
+                reasons.push("Discover • Fresh artist pick");
+            } else if (signals.taste.playCount === 0) {
+                reasons.push("Fresh discovery");
+            } else if (signals.artist.score === 0) {
+                reasons.push("Discover • Sonic bridge");
+            }
+        } else if (mode === "deep-cuts") {
+            if (moods.includes("Deep Cuts")) {
+                reasons.push("Deep Cut selection");
+            } else if ((candidate.popularity || 1) <= 0.80) {
+                reasons.push("Deep Cut • Hidden gem");
+            }
+        } else if (mode === "upbeat") {
+            if ((candidate.energy || 0) >= 0.75 || moods.includes("Upbeat") || moods.includes("Energetic")) {
+                reasons.push(`Upbeat • ${Math.round((candidate.energy || 0.75) * 100)}% energy`);
+            }
+        } else if (mode === "chill") {
+            if ((candidate.acousticness || 0) >= 0.45 || moods.includes("Chill") || moods.includes("Soulful")) {
+                reasons.push("Acoustic chill texture");
+            }
+        }
 
         if (signals.artist.matchType === "same-primary-artist") {
             reasons.push(`More from ${candidate.primaryArtist}`);
@@ -828,20 +953,14 @@
             reasons.push(`Harmonic tempo (${candidate.bpm} BPM)`);
         }
 
-        if (signals.taste.liked) {
+        if (signals.taste.liked && !reasons.some((r) => r.includes("Liked"))) {
             reasons.push("In your Liked Songs");
-        } else if (signals.taste.playCount > 0 && signals.taste.avgCompletionRatio >= 0.85) {
+        } else if (
+            signals.taste.playCount > 0 &&
+            signals.taste.avgCompletionRatio >= 0.85 &&
+            !reasons.some((r) => r.includes("completion"))
+        ) {
             reasons.push("High completion favorite");
-        }
-
-        if (mixMode === "deep-cuts" && (candidate.moods || []).includes("Deep Cuts")) {
-            reasons.push("Deep Cut selection");
-        } else if (mixMode === "discover" && signals.taste.playCount === 0) {
-            reasons.push("Fresh discovery");
-        } else if (mixMode === "upbeat" && (candidate.energy || 0) >= 0.75) {
-            reasons.push("High-energy upbeat pick");
-        } else if (mixMode === "chill" && (candidate.acousticness || 0) >= 0.5) {
-            reasons.push("Acoustic chill texture");
         }
 
         if (reasons.length === 0) {
@@ -1158,9 +1277,117 @@
         });
     }
 
+    /**
+     * Computes live aggregate vibe & tuning telemetry for an upcoming queue of tracks
+     * so the Up Next drawer can display real-time feedback when switching YT Music tuning chips.
+     */
+    function computeQueueVibeMetrics(tracks = [], options = {}) {
+        const list = Array.isArray(tracks)
+            ? tracks.map((item) => (item && item.track ? item.track : item)).filter(Boolean)
+            : [];
+        const mixMode = normalizeString(options.mixMode || "all");
+        const profile = getMixModeProfile(mixMode);
+        const storage =
+            options.storage !== undefined
+                ? options.storage
+                : globalScope && globalScope.SpotTubeStorage
+                  ? globalScope.SpotTubeStorage
+                  : null;
+
+        if (list.length === 0) {
+            return {
+                mixMode: profile.id,
+                profile,
+                trackCount: 0,
+                avgBpm: 0,
+                avgEnergyPct: 0,
+                avgAcousticPct: 0,
+                avgPopularityPct: 0,
+                discoveryRatioPct: 0,
+                familiarCount: 0,
+                deepCutsCount: 0,
+                summaryText: `${profile.shortLabel} • ${profile.description}`,
+            };
+        }
+
+        let bpmSum = 0;
+        let energySum = 0;
+        let acousticSum = 0;
+        let popSum = 0;
+        let unplayedCount = 0;
+        let familiarCount = 0;
+        let deepCutsCount = 0;
+
+        for (const t of list) {
+            bpmSum += Number(t.bpm || 110);
+            energySum += Number(t.energy ?? 0.65);
+            acousticSum += Number(t.acousticness ?? 0.25);
+            popSum += Number(t.popularity ?? 0.75);
+
+            const stats =
+                storage && typeof storage.getTrackStats === "function"
+                    ? storage.getTrackStats(t.id)
+                    : null;
+            const playCount = stats ? stats.playCount || 0 : 0;
+            const liked = stats ? Boolean(stats.liked) : false;
+
+            if (playCount === 0) {
+                unplayedCount++;
+            }
+            if (liked || playCount > 0 || Number(t.popularity ?? 0) >= 0.85) {
+                familiarCount++;
+            }
+            if (
+                (Array.isArray(t.moods) && t.moods.includes("Deep Cuts")) ||
+                Number(t.popularity ?? 1) <= 0.78
+            ) {
+                deepCutsCount++;
+            }
+        }
+
+        const n = list.length;
+        const avgBpm = Math.round(bpmSum / n);
+        const avgEnergyPct = Math.round((energySum / n) * 100);
+        const avgAcousticPct = Math.round((acousticSum / n) * 100);
+        const avgPopularityPct = Math.round((popSum / n) * 100);
+        const discoveryRatioPct = Math.round((unplayedCount / n) * 100);
+
+        let summaryText = `${profile.shortLabel} • ${avgEnergyPct}% Energy • ${avgBpm} BPM`;
+        if (profile.id === "upbeat") {
+            summaryText = `Upbeat • Avg ${avgEnergyPct}% Energy • ${avgBpm} BPM`;
+        } else if (profile.id === "chill") {
+            summaryText = `Chill • Avg ${avgAcousticPct}% Acoustic • ${avgBpm} BPM`;
+        } else if (profile.id === "deep-cuts") {
+            summaryText = `Deep Cuts • ${deepCutsCount} hidden gems • ${avgPopularityPct}% avg pop`;
+        } else if (profile.id === "discover") {
+            summaryText = `Discover • ${discoveryRatioPct}% fresh / unplayed picks`;
+        } else if (profile.id === "familiar") {
+            summaryText = `Familiar • ${familiarCount} favorites & signature hits`;
+        } else {
+            summaryText = `Balanced Hybrid • ${avgEnergyPct}% Energy • ${avgBpm} BPM`;
+        }
+
+        return {
+            mixMode: profile.id,
+            profile,
+            trackCount: n,
+            avgBpm,
+            avgEnergyPct,
+            avgAcousticPct,
+            avgPopularityPct,
+            discoveryRatioPct,
+            familiarCount,
+            deepCutsCount,
+            summaryText,
+        };
+    }
+
     return {
         DEFAULT_WEIGHTS,
         VALID_MIX_MODES,
+        MIX_MODE_PROFILES,
+        getMixModeProfile,
+        computeQueueVibeMetrics,
         getTrackArtists,
         buildCollaboratorGraph,
         cosineSimilarity,

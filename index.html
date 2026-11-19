@@ -337,12 +337,20 @@
 
                     <!-- YT Music Dynamic Mix Tuning Chips -->
                     <div class="mix-tuning-chips" id="mix-tuning-chips" role="group" aria-label="Dynamic Mix Mode Tuning">
-                        <button type="button" class="tuning-chip active" data-mix-mode="all">All</button>
-                        <button type="button" class="tuning-chip" data-mix-mode="familiar">Familiar</button>
-                        <button type="button" class="tuning-chip" data-mix-mode="discover">Discover</button>
-                        <button type="button" class="tuning-chip" data-mix-mode="deep-cuts">Deep Cuts</button>
-                        <button type="button" class="tuning-chip" data-mix-mode="upbeat">Upbeat</button>
-                        <button type="button" class="tuning-chip" data-mix-mode="chill">Chill</button>
+                        <button type="button" class="tuning-chip active" data-mix-mode="all" aria-pressed="true" title="Balanced blend of your favorites, sonic matches, and fresh picks">All</button>
+                        <button type="button" class="tuning-chip" data-mix-mode="familiar" aria-pressed="false" title="Prioritize liked songs, high-completion favorites, and signature hits">Familiar</button>
+                        <button type="button" class="tuning-chip" data-mix-mode="discover" aria-pressed="false" title="Surface unplayed tracks, new artists, and sonic bridges">Discover</button>
+                        <button type="button" class="tuning-chip" data-mix-mode="deep-cuts" aria-pressed="false" title="Dig into lower-popularity hidden gems and niche subgenres">Deep Cuts</button>
+                        <button type="button" class="tuning-chip" data-mix-mode="upbeat" aria-pressed="false" title="Boost high-energy, danceable, fast-tempo tracks">Upbeat</button>
+                        <button type="button" class="tuning-chip" data-mix-mode="chill" aria-pressed="false" title="Lean into acoustic textures, smooth tempos, and laid-back vibes">Chill</button>
+                    </div>
+
+                    <div class="mix-tuning-insight" id="mix-tuning-insight">
+                        <span class="mix-tuning-caption" id="mix-tuning-caption">Balanced Hybrid &bull; Multi-signal sonic &amp; taste match</span>
+                        <button type="button" class="mix-retune-btn" id="retune-mix-btn" title="Refresh upcoming auto-mix tracks for current mode" aria-label="Refresh upcoming mix tracks">
+                            <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M13.65 2.35A7.958 7.958 0 0 0 8 0a8 8 0 1 0 7.75 10h-2.08A5.99 5.99 0 0 1 8 14 6 6 0 1 1 12.24 3.76L9.5 6.5H16V0l-2.35 2.35z"/></svg>
+                            <span>Retune</span>
+                        </button>
                     </div>
 
                     <!-- Now Playing Mini Card -->

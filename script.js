@@ -264,6 +264,7 @@ const playMusic = (trackOrIndex, pause = false, options = {}) => {
     if (qm && !options.skipQueueSync) {
         qm.setCurrentTrack(track, {
             catalog: songs,
+            regenerateMix: true,
             preserveManual: true,
             silent: true,
         });
@@ -738,6 +739,15 @@ function renderDrawerNowPlaying(track) {
     `;
 }
 
+const VALID_MIX_MODES = ["all", "familiar", "discover", "deep-cuts", "upbeat", "chill"];
+
+function normalizeMixMode(mode) {
+    const clean = String(mode || "all")
+        .trim()
+        .toLowerCase();
+    return VALID_MIX_MODES.includes(clean) ? clean : "all";
+}
+
 function getUpcomingQueueTracks() {
     if (!songs.length) return [];
 
@@ -818,14 +828,318 @@ function getUpcomingQueueTracks() {
     return ordered;
 }
 
+function syncMixTuningChipsUI() {
+    document.querySelectorAll("#mix-tuning-chips .tuning-chip").forEach((chip) => {
+        const isSelected = chip.dataset.mixMode === activeMixMode;
+        chip.classList.toggle("active", isSelected);
+        chip.setAttribute("aria-pressed", String(isSelected));
+    });
+}
+
+function getQueueVibeMetrics(upcomingTracks) {
+    const qm = getQueueManager();
+    if (qm && typeof qm.getQueueVibeMetrics === "function") {
+        return qm.getQueueVibeMetrics();
+    }
+    const recommender = getRecommender();
+    const list = Array.isArray(upcomingTracks) ? upcomingTracks : getUpcomingQueueTracks();
+    if (recommender && typeof recommender.computeQueueVibeMetrics === "function") {
+        return recommender.computeQueueVibeMetrics(list, {
+            mixMode: activeMixMode,
+            storage: getStorage(),
+        });
+    }
+    const n = list.length;
+    const avgBpm = n ? Math.round(list.reduce((s, t) => s + Number(t.bpm || 110), 0) / n) : 0;
+    const avgEnergyPct = n
+        ? Math.round((list.reduce((s, t) => s + Number(t.energy ?? 0.65), 0) / n) * 100)
+        : 0;
+    return {
+        mixMode: activeMixMode,
+        trackCount: n,
+        avgBpm,
+        avgEnergyPct,
+        summaryText: `${activeMixMode.toUpperCase()} • ${avgEnergyPct}% Energy • ${avgBpm} BPM`,
+    };
+}
+
+function renderMixTuningInsight(upcomingTracks) {
+    const captionEl = document.getElementById("mix-tuning-caption");
+    const autoplayPill = document.getElementById("mix-autoplay-pill");
+    const metrics = getQueueVibeMetrics(upcomingTracks);
+    if (captionEl && metrics?.summaryText) {
+        captionEl.textContent = metrics.summaryText;
+    }
+    if (autoplayPill && metrics?.profile) {
+        autoplayPill.textContent =
+            activeMixMode === "all" ? "Endless Auto" : `${metrics.profile.shortLabel} Auto`;
+    }
+    return metrics;
+}
+
+/**
+ * Reorders existing DOM nodes inside a container without recreating them,
+ * using `Element.prototype.moveBefore` when available (preserving focus, state,
+ * and View Transition identity) with safe fallback to `append` / `replaceChildren`.
+ */
+function reorderContainerNodes(container, orderedNodes) {
+    const hasMoveBefore =
+        typeof Element !== "undefined" &&
+        Object.hasOwn(Element.prototype, "moveBefore") &&
+        typeof container.moveBefore === "function";
+    const hasAppend = typeof container.append === "function";
+
+    if (hasMoveBefore) {
+        for (const node of orderedNodes) {
+            container.moveBefore(node, null);
+        }
+    } else if (hasAppend) {
+        for (const node of orderedNodes) {
+            container.append(node);
+        }
+    } else if (typeof container.replaceChildren === "function") {
+        container.replaceChildren(...orderedNodes);
+    }
+
+    if (Array.isArray(container.children)) {
+        container.children = orderedNodes;
+    }
+}
+
+function runQueueViewTransition(queueList, updateFn, shouldAnimate = false) {
+    if (!shouldAnimate) {
+        updateFn();
+        return;
+    }
+    if (typeof queueList.startViewTransition === "function") {
+        queueList.startViewTransition(updateFn);
+    } else if (
+        typeof document !== "undefined" &&
+        typeof document.startViewTransition === "function"
+    ) {
+        document.startViewTransition(updateFn);
+    } else {
+        updateFn();
+    }
+}
+
 let draggedQueueIndex = null;
 
-function renderDrawerQueue() {
+function updateQueueItemNode(item, track, idx, totalCount) {
+    const isManual = track.queueMeta?.source === "manual";
+    const isPlayNext = track.queueMeta?.manualType === "play-next";
+    const queueId = track.queueMeta?.queueId || `q-idx-${idx}-${track.id}`;
+
+    item.className = isManual ? "queue-item manual-queue-item" : "queue-item";
+    item.dataset.trackId = track.id;
+    item.dataset.queueId = queueId;
+    item.dataset.queueIndex = String(idx);
+
+    const reason = track.recommendation?.primaryReason;
+    const scorePct =
+        typeof track.recommendation?.totalScore === "number" && !isManual
+            ? `${Math.round(track.recommendation.totalScore * 100)}% match`
+            : "";
+    item.title = reason ? (scorePct ? `${reason} • ${scorePct}` : reason) : "";
+
+    const subText = reason ? `${track.artistDisplay} • ${reason}` : track.artistDisplay;
+    const sourcePillHtml = isManual
+        ? `<span class="queue-source-pill ${isPlayNext ? "play-next-pill" : ""}">${
+              isPlayNext ? "NEXT" : "QUEUED"
+          }</span>`
+        : "";
+
+    if (typeof item.querySelector === "function") {
+        const artistEl = item.querySelector(".queue-item-artist");
+        if (artistEl) artistEl.textContent = subText;
+        const titleRowEl = item.querySelector(".queue-item-title-row");
+        if (titleRowEl) {
+            titleRowEl.innerHTML = `<span class="queue-item-title">${track.title}</span>${sourcePillHtml}`;
+        }
+        const upBtn = item.querySelector('[data-queue-action="move-up"]');
+        if (upBtn) {
+            upBtn.disabled = idx === 0;
+            if (idx === 0) upBtn.setAttribute("disabled", "");
+            else if (typeof upBtn.removeAttribute === "function") upBtn.removeAttribute("disabled");
+        }
+        const downBtn = item.querySelector('[data-queue-action="move-down"]');
+        if (downBtn) {
+            downBtn.disabled = idx === totalCount - 1;
+            if (idx === totalCount - 1) downBtn.setAttribute("disabled", "");
+            else if (typeof downBtn.removeAttribute === "function") downBtn.removeAttribute("disabled");
+        }
+    }
+    return item;
+}
+
+function createQueueItemNode(track, idx, totalCount) {
+    const item = document.createElement("div");
+    const isManual = track.queueMeta?.source === "manual";
+    const isPlayNext = track.queueMeta?.manualType === "play-next";
+    const queueId = track.queueMeta?.queueId || `q-idx-${idx}-${track.id}`;
+
+    item.className = isManual ? "queue-item manual-queue-item" : "queue-item";
+    item.setAttribute("role", "listitem");
+    item.setAttribute("draggable", "true");
+    item.dataset.trackId = track.id;
+    item.dataset.queueId = queueId;
+    item.dataset.queueIndex = String(idx);
+
+    const reason = track.recommendation?.primaryReason;
+    const scorePct =
+        typeof track.recommendation?.totalScore === "number" && !isManual
+            ? `${Math.round(track.recommendation.totalScore * 100)}% match`
+            : "";
+    if (reason) {
+        item.title = scorePct ? `${reason} • ${scorePct}` : reason;
+    }
+    const subText = reason ? `${track.artistDisplay} • ${reason}` : track.artistDisplay;
+    const sourcePillHtml = isManual
+        ? `<span class="queue-source-pill ${isPlayNext ? "play-next-pill" : ""}">${
+              isPlayNext ? "NEXT" : "QUEUED"
+          }</span>`
+        : "";
+
+    item.innerHTML = `
+        <button type="button" class="queue-drag-handle" aria-label="Reorder ${track.title} in queue" title="Drag or use arrows to reorder">
+            <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M5 3.5a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5zm6 0a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5zM5 7a1.25 1.25 0 1 1 0 2.5A1.25 1.25 0 0 1 5 7zm6 0a1.25 1.25 0 1 1 0 2.5A1.25 1.25 0 0 1 11 7zm-6 3.5a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5zm6 0a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5z"/></svg>
+        </button>
+        <img src="${track.coverUrl}" alt="${track.title}" class="queue-item-cover">
+        <div class="queue-item-meta">
+            <div class="queue-item-title-row">
+                <span class="queue-item-title">${track.title}</span>
+                ${sourcePillHtml}
+            </div>
+            <span class="queue-item-artist">${subText}</span>
+        </div>
+        <div class="queue-item-right">
+            <div class="queue-item-actions" role="group" aria-label="Queue actions for ${track.title}">
+                <button type="button" class="queue-action-btn" data-queue-action="move-up" title="Move up" aria-label="Move ${track.title} up in queue" ${idx === 0 ? "disabled" : ""}>
+                    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 3.5 2.5 9l1.06 1.06L8 5.62l4.44 4.44L13.5 9 8 3.5z"/></svg>
+                </button>
+                <button type="button" class="queue-action-btn" data-queue-action="move-down" title="Move down" aria-label="Move ${track.title} down in queue" ${idx === totalCount - 1 ? "disabled" : ""}>
+                    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 12.5 2.5 7l1.06-1.06L8 10.38l4.44-4.44L13.5 7 8 12.5z"/></svg>
+                </button>
+                <button type="button" class="queue-action-btn" data-queue-action="play-next" title="Promote to Play Next" aria-label="Play ${track.title} next">
+                    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M2 3.75A.75.75 0 0 1 2.75 3h7.5a.75.75 0 0 1 0 1.5h-7.5A.75.75 0 0 1 2 3.75zm0 4A.75.75 0 0 1 2.75 7h5.5a.75.75 0 0 1 0 1.5h-5.5A.75.75 0 0 1 2 7.75zm9.5-.5v2.25H9.25a.75.75 0 0 0 0 1.5h2.25v2.25a.75.75 0 0 0 1.5 0V11h2.25a.75.75 0 0 0 0-1.5H13V7.25a.75.75 0 0 0-1.5 0z"/></svg>
+                </button>
+                <button type="button" class="queue-action-btn remove-btn" data-queue-action="remove" title="Remove from queue" aria-label="Remove ${track.title} from queue">
+                    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06z"/></svg>
+                </button>
+            </div>
+            <span class="queue-item-duration">${track.durationFormatted || "0:00"}</span>
+        </div>
+    `;
+
+    if (typeof item.querySelectorAll === "function") {
+        item.querySelectorAll("[data-queue-action]").forEach((btn) => {
+            btn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const action = btn.dataset.queueAction;
+                const currentIdx = Number(item.dataset.queueIndex);
+                const currentQueueId = item.dataset.queueId;
+                const currentTrackId = item.dataset.trackId;
+                const qm = getQueueManager();
+                const currentUpcoming = getUpcomingQueueTracks();
+                if (action === "move-up") {
+                    reorderQueueItems(currentIdx, Math.max(0, currentIdx - 1));
+                } else if (action === "move-down") {
+                    reorderQueueItems(
+                        currentIdx,
+                        Math.min(currentUpcoming.length - 1, currentIdx + 1)
+                    );
+                } else if (action === "play-next") {
+                    if (qm && typeof qm.promoteToPlayNext === "function") {
+                        qm.promoteToPlayNext(currentQueueId);
+                        renderDrawerQueue({ animateReorder: true });
+                        announceQueueStatus(`Promoted ${track.title} to Play Next`);
+                    } else {
+                        playTrackNext(currentTrackId);
+                    }
+                } else if (action === "remove") {
+                    removeTrackFromQueue(currentQueueId);
+                }
+            });
+        });
+    }
+
+    // Keyboard arrow reordering on drag handle
+    const dragHandle = item.querySelector(".queue-drag-handle");
+    if (dragHandle && typeof dragHandle.addEventListener === "function") {
+        dragHandle.addEventListener("click", (e) => e.stopPropagation());
+        dragHandle.addEventListener("keydown", (e) => {
+            const currentIdx = Number(item.dataset.queueIndex);
+            const currentUpcoming = getUpcomingQueueTracks();
+            if (e.key === "ArrowUp" && currentIdx > 0) {
+                e.preventDefault();
+                e.stopPropagation();
+                reorderQueueItems(currentIdx, currentIdx - 1);
+            } else if (e.key === "ArrowDown" && currentIdx < currentUpcoming.length - 1) {
+                e.preventDefault();
+                e.stopPropagation();
+                reorderQueueItems(currentIdx, currentIdx + 1);
+            }
+        });
+    }
+
+    // HTML5 / Pointer Drag-and-Drop Reordering
+    item.addEventListener("dragstart", (e) => {
+        const currentIdx = Number(item.dataset.queueIndex);
+        draggedQueueIndex = currentIdx;
+        item.classList.add("dragging");
+        if (e.dataTransfer) {
+            e.dataTransfer.effectAllowed = "move";
+            e.dataTransfer.setData("text/plain", String(currentIdx));
+        }
+    });
+    item.addEventListener("dragend", () => {
+        draggedQueueIndex = null;
+        item.classList.remove("dragging");
+    });
+    item.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        if (e.dataTransfer) {
+            e.dataTransfer.dropEffect = "move";
+        }
+    });
+    item.addEventListener("drop", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const targetIdx = Number(item.dataset.queueIndex);
+        const fromIdx =
+            draggedQueueIndex !== null
+                ? draggedQueueIndex
+                : Number(e.dataTransfer?.getData("text/plain"));
+        if (Number.isInteger(fromIdx) && fromIdx >= 0 && fromIdx !== targetIdx) {
+            reorderQueueItems(fromIdx, targetIdx);
+        }
+        draggedQueueIndex = null;
+    });
+
+    item.addEventListener("click", () => {
+        const currentQueueId = item.dataset.queueId;
+        const currentTrackId = item.dataset.trackId;
+        const qm = getQueueManager();
+        if (qm && typeof qm.jumpToQueueItem === "function") {
+            const targetTrack = qm.jumpToQueueItem(currentQueueId);
+            if (targetTrack) {
+                playMusic(targetTrack.id, false, { skipQueueSync: true });
+                return;
+            }
+        }
+        playMusic(currentTrackId, false);
+    });
+    return item;
+}
+
+function renderDrawerQueue(options = {}) {
     const queueList = document.getElementById("queue-list");
     const queueSummary = document.getElementById("drawer-queue-summary");
     const queueBadge = document.getElementById("queue-count-badge");
     const clearManualBtn = document.getElementById("clear-manual-queue-btn");
     if (!queueList) return;
+
+    syncMixTuningChipsUI();
 
     const upcoming = getUpcomingQueueTracks();
     const manualCount = upcoming.filter((t) => t.queueMeta?.source === "manual").length;
@@ -843,153 +1157,48 @@ function renderDrawerQueue() {
         clearManualBtn.hidden = manualCount === 0;
     }
 
-    const nodes = upcoming.map((track, idx) => {
-        const item = document.createElement("div");
-        const isManual = track.queueMeta?.source === "manual";
-        const isPlayNext = track.queueMeta?.manualType === "play-next";
-        const queueId = track.queueMeta?.queueId || `q-idx-${idx}-${track.id}`;
+    renderMixTuningInsight(upcoming);
 
-        item.className = isManual ? "queue-item manual-queue-item" : "queue-item";
-        item.setAttribute("role", "listitem");
-        item.setAttribute("draggable", "true");
-        item.dataset.trackId = track.id;
-        item.dataset.queueId = queueId;
-        item.dataset.queueIndex = String(idx);
-
-        const reason = track.recommendation?.primaryReason;
-        const scorePct =
-            typeof track.recommendation?.totalScore === "number" && !isManual
-                ? `${Math.round(track.recommendation.totalScore * 100)}% match`
-                : "";
-        if (reason) {
-            item.title = scorePct ? `${reason} • ${scorePct}` : reason;
+    // Check if existing DOM nodes in `#queue-list` represent the same set of tracks
+    // so we can reorder existing nodes in-place via `moveBefore` + View Transitions
+    const existingChildren = Array.from(queueList.children || []);
+    const existingPoolsByTrackId = new Map();
+    for (const child of existingChildren) {
+        const tid = child?.dataset?.trackId;
+        if (tid) {
+            if (!existingPoolsByTrackId.has(tid)) {
+                existingPoolsByTrackId.set(tid, []);
+            }
+            existingPoolsByTrackId.get(tid).push(child);
         }
-        const subText = reason ? `${track.artistDisplay} • ${reason}` : track.artistDisplay;
-        const sourcePillHtml = isManual
-            ? `<span class="queue-source-pill ${isPlayNext ? "play-next-pill" : ""}">${
-                  isPlayNext ? "NEXT" : "QUEUED"
-              }</span>`
-            : "";
+    }
 
-        item.innerHTML = `
-            <button type="button" class="queue-drag-handle" aria-label="Reorder ${track.title} in queue" title="Drag or use arrows to reorder">
-                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M5 3.5a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5zm6 0a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5zM5 7a1.25 1.25 0 1 1 0 2.5A1.25 1.25 0 0 1 5 7zm6 0a1.25 1.25 0 1 1 0 2.5A1.25 1.25 0 0 1 11 7zm-6 3.5a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5zm6 0a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5z"/></svg>
-            </button>
-            <img src="${track.coverUrl}" alt="${track.title}" class="queue-item-cover">
-            <div class="queue-item-meta">
-                <div class="queue-item-title-row">
-                    <span class="queue-item-title">${track.title}</span>
-                    ${sourcePillHtml}
-                </div>
-                <span class="queue-item-artist">${subText}</span>
-            </div>
-            <div class="queue-item-right">
-                <div class="queue-item-actions" role="group" aria-label="Queue actions for ${track.title}">
-                    <button type="button" class="queue-action-btn" data-queue-action="move-up" title="Move up" aria-label="Move ${track.title} up in queue" ${idx === 0 ? "disabled" : ""}>
-                        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 3.5 2.5 9l1.06 1.06L8 5.62l4.44 4.44L13.5 9 8 3.5z"/></svg>
-                    </button>
-                    <button type="button" class="queue-action-btn" data-queue-action="move-down" title="Move down" aria-label="Move ${track.title} down in queue" ${idx === upcoming.length - 1 ? "disabled" : ""}>
-                        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 12.5 2.5 7l1.06-1.06L8 10.38l4.44-4.44L13.5 7 8 12.5z"/></svg>
-                    </button>
-                    <button type="button" class="queue-action-btn" data-queue-action="play-next" title="Promote to Play Next" aria-label="Play ${track.title} next">
-                        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M2 3.75A.75.75 0 0 1 2.75 3h7.5a.75.75 0 0 1 0 1.5h-7.5A.75.75 0 0 1 2 3.75zm0 4A.75.75 0 0 1 2.75 7h5.5a.75.75 0 0 1 0 1.5h-5.5A.75.75 0 0 1 2 7.75zm9.5-.5v2.25H9.25a.75.75 0 0 0 0 1.5h2.25v2.25a.75.75 0 0 0 1.5 0V11h2.25a.75.75 0 0 0 0-1.5H13V7.25a.75.75 0 0 0-1.5 0z"/></svg>
-                    </button>
-                    <button type="button" class="queue-action-btn remove-btn" data-queue-action="remove" title="Remove from queue" aria-label="Remove ${track.title} from queue">
-                        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06z"/></svg>
-                    </button>
-                </div>
-                <span class="queue-item-duration">${track.durationFormatted || "0:00"}</span>
-            </div>
-        `;
-
-        if (typeof item.querySelectorAll === "function") {
-            item.querySelectorAll("[data-queue-action]").forEach((btn) => {
-                btn.addEventListener("click", (e) => {
-                    e.stopPropagation();
-                    const action = btn.dataset.queueAction;
-                    const qm = getQueueManager();
-                    if (action === "move-up") {
-                        reorderQueueItems(idx, Math.max(0, idx - 1));
-                    } else if (action === "move-down") {
-                        reorderQueueItems(idx, Math.min(upcoming.length - 1, idx + 1));
-                    } else if (action === "play-next") {
-                        if (qm && typeof qm.promoteToPlayNext === "function") {
-                            qm.promoteToPlayNext(queueId);
-                            renderDrawerQueue();
-                            announceQueueStatus(`Promoted ${track.title} to Play Next`);
-                        } else {
-                            playTrackNext(track.id);
-                        }
-                    } else if (action === "remove") {
-                        removeTrackFromQueue(queueId);
-                    }
-                });
-            });
-        }
-
-        // Keyboard arrow reordering on drag handle
-        const dragHandle = item.querySelector(".queue-drag-handle");
-        if (dragHandle && typeof dragHandle.addEventListener === "function") {
-            dragHandle.addEventListener("click", (e) => e.stopPropagation());
-            dragHandle.addEventListener("keydown", (e) => {
-                if (e.key === "ArrowUp" && idx > 0) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    reorderQueueItems(idx, idx - 1);
-                } else if (e.key === "ArrowDown" && idx < upcoming.length - 1) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    reorderQueueItems(idx, idx + 1);
-                }
-            });
-        }
-
-        // HTML5 / Pointer Drag-and-Drop Reordering
-        item.addEventListener("dragstart", (e) => {
-            draggedQueueIndex = idx;
-            item.classList.add("dragging");
-            if (e.dataTransfer) {
-                e.dataTransfer.effectAllowed = "move";
-                e.dataTransfer.setData("text/plain", String(idx));
-            }
-        });
-        item.addEventListener("dragend", () => {
-            draggedQueueIndex = null;
-            item.classList.remove("dragging");
-        });
-        item.addEventListener("dragover", (e) => {
-            e.preventDefault();
-            if (e.dataTransfer) {
-                e.dataTransfer.dropEffect = "move";
-            }
-        });
-        item.addEventListener("drop", (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            const fromIdx =
-                draggedQueueIndex !== null
-                    ? draggedQueueIndex
-                    : Number(e.dataTransfer?.getData("text/plain"));
-            if (Number.isInteger(fromIdx) && fromIdx >= 0 && fromIdx !== idx) {
-                reorderQueueItems(fromIdx, idx);
-            }
-            draggedQueueIndex = null;
+    const canReorderExisting =
+        existingChildren.length === upcoming.length &&
+        upcoming.length > 0 &&
+        upcoming.every((t) => {
+            const pool = existingPoolsByTrackId.get(t.id);
+            return pool && pool.length > 0;
         });
 
-        item.addEventListener("click", () => {
-            const qm = getQueueManager();
-            if (qm && typeof qm.jumpToQueueItem === "function") {
-                const targetTrack = qm.jumpToQueueItem(queueId);
-                if (targetTrack) {
-                    playMusic(targetTrack.id, false, { skipQueueSync: true });
-                    return;
-                }
-            }
-            playMusic(track.id, false);
+    if (canReorderExisting) {
+        const orderedExistingNodes = upcoming.map((track, idx) => {
+            const pool = existingPoolsByTrackId.get(track.id);
+            const node = pool.shift();
+            return updateQueueItemNode(node, track, idx, upcoming.length);
         });
-        return item;
-    });
 
+        runQueueViewTransition(
+            queueList,
+            () => reorderContainerNodes(queueList, orderedExistingNodes),
+            Boolean(options.animateReorder)
+        );
+        return;
+    }
+
+    const nodes = upcoming.map((track, idx) =>
+        createQueueItemNode(track, idx, upcoming.length)
+    );
     queueList.replaceChildren(...nodes);
 }
 
@@ -1096,6 +1305,51 @@ function setMoodFilter(mood) {
     pushNavState();
     renderCatalogGrid();
     renderDrawerQueue();
+}
+
+/**
+ * Dynamically switches the YT Music Mix Mode inside the "Up Next / Mix" drawer
+ * (`all`, `familiar`, `discover`, `deep-cuts`, `upbeat`, `chill`), re-ranking and regenerating
+ * upcoming auto-queued tracks without interrupting current playback.
+ */
+function setMixMode(mode, options = {}) {
+    activeMixMode = normalizeMixMode(mode);
+    syncMixTuningChipsUI();
+
+    const qm = getQueueManager();
+    if (qm && typeof qm.setMixMode === "function") {
+        ensureQueueCatalogSynced();
+        qm.setMixMode(activeMixMode, {
+            silent: true,
+            preserveUserReordered: options.preserveUserReordered,
+            seedTracks: options.seedTracks,
+        });
+    }
+
+    renderDrawerQueue({ animateReorder: options.animate !== false });
+
+    const upcoming = getUpcomingQueueTracks();
+    const recommender = getRecommender();
+    const profile =
+        qm && typeof qm.getMixModeProfile === "function"
+            ? qm.getMixModeProfile(activeMixMode)
+            : recommender && typeof recommender.getMixModeProfile === "function"
+              ? recommender.getMixModeProfile(activeMixMode)
+              : { label: activeMixMode, shortLabel: activeMixMode };
+
+    if (!options.silent) {
+        announceQueueStatus(
+            `Tuned upcoming radio mix to ${profile.label || activeMixMode} mode (${upcoming.length} upcoming tracks)`
+        );
+    }
+    return upcoming;
+}
+
+function retuneRadioMix(options = {}) {
+    return setMixMode(activeMixMode, {
+        ...options,
+        animate: options.animate !== false,
+    });
 }
 
 function toggleRightDrawer(forceState) {
@@ -1259,20 +1513,35 @@ function initShellControls() {
     });
 
     // 7. YT Music Dynamic Mix Tuning Chips inside Right Drawer
-    document.querySelectorAll("#mix-tuning-chips .tuning-chip").forEach((chip) => {
+    const tuningChips = Array.from(
+        document.querySelectorAll("#mix-tuning-chips .tuning-chip")
+    );
+    tuningChips.forEach((chip, chipIdx) => {
         chip.addEventListener("click", () => {
-            activeMixMode = chip.dataset.mixMode || "all";
-            document.querySelectorAll("#mix-tuning-chips .tuning-chip").forEach((c) => {
-                c.classList.toggle("active", c === chip);
-            });
-            const qm = getQueueManager();
-            if (qm && typeof qm.setMixMode === "function") {
-                qm.setMixMode(activeMixMode, { silent: true });
-            }
-            renderDrawerQueue();
-            announceQueueStatus(`Tuned upcoming radio mix to ${chip.textContent || activeMixMode} mode`);
+            setMixMode(chip.dataset.mixMode || "all");
         });
+        if (typeof chip.addEventListener === "function") {
+            chip.addEventListener("keydown", (e) => {
+                if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+                    e.preventDefault();
+                    const dir = e.key === "ArrowRight" ? 1 : -1;
+                    const nextIdx = (chipIdx + dir + tuningChips.length) % tuningChips.length;
+                    const nextChip = tuningChips[nextIdx];
+                    if (nextChip) {
+                        if (typeof nextChip.focus === "function") nextChip.focus();
+                        setMixMode(nextChip.dataset.mixMode || "all");
+                    }
+                }
+            });
+        }
     });
+
+    const retuneMixBtn = document.getElementById("retune-mix-btn");
+    if (retuneMixBtn) {
+        retuneMixBtn.addEventListener("click", () => {
+            retuneRadioMix();
+        });
+    }
 
     // 8. Universal Start Mix Triggers (Search Mix, Track Mix, Mood Mix, and Supermix)
     const searchMixBtn = document.getElementById("search-mix-btn");
@@ -1594,6 +1863,7 @@ window.SpotTubeShell = {
     resolveTrackIndex,
     getFilteredSongs,
     getUpcomingQueueTracks,
+    getQueueVibeMetrics,
     startRadioMix,
     playTrackNext,
     addTrackToQueue,
@@ -1604,6 +1874,8 @@ window.SpotTubeShell = {
     playNextFromQueue,
     playPreviousFromQueue,
     setMoodFilter,
+    setMixMode,
+    retuneRadioMix,
     toggleRightDrawer,
     switchDrawerTab,
     renderCatalogGrid,
@@ -1611,7 +1883,10 @@ window.SpotTubeShell = {
     renderDrawerNowPlaying,
     renderDrawerQueue,
     renderDrawerTrackInfo,
+    renderMixTuningInsight,
+    reorderContainerNodes,
     syncActiveTrackUI,
+    syncMixTuningChipsUI,
     getState: () => ({
         songs,
         currentTrackIndex,
@@ -1629,7 +1904,7 @@ window.SpotTubeShell = {
         if (typeof patch.activeMoodFilter === "string") activeMoodFilter = patch.activeMoodFilter;
         if (typeof patch.activeSearchQuery === "string") activeSearchQuery = patch.activeSearchQuery;
         if (typeof patch.activeLibraryFilter === "string") activeLibraryFilter = patch.activeLibraryFilter;
-        if (typeof patch.activeMixMode === "string") activeMixMode = patch.activeMixMode;
+        if (typeof patch.activeMixMode === "string") activeMixMode = normalizeMixMode(patch.activeMixMode);
         if (typeof patch.isDrawerOpen === "boolean") isDrawerOpen = patch.isDrawerOpen;
         if (typeof patch.activeDrawerTab === "string") activeDrawerTab = patch.activeDrawerTab;
 
