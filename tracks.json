@@ -1,0 +1,680 @@
+{
+  "version": "1.0.0",
+  "generatedBy": "scripts/build-catalog.js",
+  "totalTracks": 12,
+  "genres": [
+    "Bollywood Arabic Fusion",
+    "Bollywood Pop",
+    "Bollywood Romance",
+    "Bollywood Soul",
+    "Devotional / Spiritual",
+    "Hip-Hop",
+    "Pop",
+    "Punjabi Pop"
+  ],
+  "moods": [
+    "Chill",
+    "Deep Cuts",
+    "Dramatic",
+    "Energetic",
+    "Feel Good",
+    "Focus",
+    "Happy",
+    "Hype",
+    "Late Night",
+    "Melancholic",
+    "Nostalgic",
+    "Party",
+    "Passionate",
+    "Peaceful",
+    "Romantic",
+    "Soulful",
+    "Upbeat",
+    "Workout"
+  ],
+  "artists": [
+    "A.R. Rahman",
+    "Abhijeet Srivastava",
+    "Arijit Singh",
+    "Bharat Kamal",
+    "Future",
+    "Karan Aujla",
+    "Kendrick Lamar",
+    "KK",
+    "Metro Boomin",
+    "Mohit Chauhan",
+    "Mohit Lalwani",
+    "Pritam",
+    "Sabrina Carpenter",
+    "Shreya Ghoshal",
+    "Suzanne D'Mello",
+    "Travis Scott",
+    "Vishal Shekhar"
+  ],
+  "albums": [
+    "Bharat",
+    "Making Memories",
+    "Not Like Us (Single)",
+    "Om Shanti Om",
+    "Padmaavat",
+    "RadhaKrishn",
+    "Rockstar",
+    "Rocky Aur Rani Kii Prem Kahaani",
+    "Short n' Sweet",
+    "Tamasha",
+    "UTOPIA",
+    "WE DON'T TRUST YOU"
+  ],
+  "tracks": [
+    {
+      "id": "ajab-si-kk",
+      "trackNumber": 1,
+      "filename": "Ajab Si-KK.mp3",
+      "title": "Ajab Si",
+      "primaryArtist": "KK",
+      "featuredArtists": [],
+      "artists": [
+        "KK"
+      ],
+      "artistDisplay": "KK",
+      "album": "Om Shanti Om",
+      "year": 2007,
+      "duration": 246.38,
+      "durationFormatted": "4:06",
+      "bitrateKbps": 320,
+      "sampleRate": 44100,
+      "audioUrl": "songs/Ajab%20Si-KK.mp3",
+      "coverUrl": "Images/Ajab%20Si.jpeg",
+      "genre": "Bollywood Romance",
+      "subgenres": [
+        "Bollywood",
+        "Romantic Ballad",
+        "Filmi",
+        "Melody"
+      ],
+      "language": "Hindi",
+      "moods": [
+        "Romantic",
+        "Chill",
+        "Soulful",
+        "Feel Good",
+        "Nostalgic"
+      ],
+      "bpm": 93,
+      "energy": 0.45,
+      "valence": 0.72,
+      "danceability": 0.54,
+      "acousticness": 0.62,
+      "popularity": 0.92,
+      "audioFeatures": {
+        "bpm": 93,
+        "energy": 0.45,
+        "valence": 0.72,
+        "danceability": 0.54,
+        "acousticness": 0.62,
+        "popularity": 0.92
+      }
+    },
+    {
+      "id": "binte-dil-arijit-singh",
+      "trackNumber": 2,
+      "filename": "Binte Dil-Arijit Singh.mp3",
+      "title": "Binte Dil",
+      "primaryArtist": "Arijit Singh",
+      "featuredArtists": [],
+      "artists": [
+        "Arijit Singh"
+      ],
+      "artistDisplay": "Arijit Singh",
+      "album": "Padmaavat",
+      "year": 2018,
+      "duration": 192.96,
+      "durationFormatted": "3:13",
+      "bitrateKbps": 320,
+      "sampleRate": 44100,
+      "audioUrl": "songs/Binte%20Dil-Arijit%20Singh.mp3",
+      "coverUrl": "Images/Binte%20Dil.jpeg",
+      "genre": "Bollywood Arabic Fusion",
+      "subgenres": [
+        "Bollywood",
+        "Sufi / Orchestral",
+        "Filmi",
+        "World"
+      ],
+      "language": "Hindi",
+      "moods": [
+        "Energetic",
+        "Passionate",
+        "Deep Cuts",
+        "Dramatic",
+        "Late Night"
+      ],
+      "bpm": 102,
+      "energy": 0.74,
+      "valence": 0.48,
+      "danceability": 0.61,
+      "acousticness": 0.35,
+      "popularity": 0.81,
+      "audioFeatures": {
+        "bpm": 102,
+        "energy": 0.74,
+        "valence": 0.48,
+        "danceability": 0.61,
+        "acousticness": 0.35,
+        "popularity": 0.81
+      }
+    },
+    {
+      "id": "chashni-abhijeet-srivastava",
+      "trackNumber": 3,
+      "filename": "Chashni-Abhijeet Srivastava, Vishal Shekhar.mp3",
+      "title": "Chashni",
+      "primaryArtist": "Abhijeet Srivastava",
+      "featuredArtists": [
+        "Vishal Shekhar"
+      ],
+      "artists": [
+        "Abhijeet Srivastava",
+        "Vishal Shekhar"
+      ],
+      "artistDisplay": "Abhijeet Srivastava, Vishal Shekhar",
+      "album": "Bharat",
+      "year": 2019,
+      "duration": 266.07,
+      "durationFormatted": "4:26",
+      "bitrateKbps": 320,
+      "sampleRate": 44100,
+      "audioUrl": "songs/Chashni-Abhijeet%20Srivastava%2C%20Vishal%20Shekhar.mp3",
+      "coverUrl": "Images/Chashni.jpeg",
+      "genre": "Bollywood Romance",
+      "subgenres": [
+        "Bollywood",
+        "Modern Filmi",
+        "Romantic",
+        "Melody"
+      ],
+      "language": "Hindi",
+      "moods": [
+        "Romantic",
+        "Chill",
+        "Feel Good",
+        "Soulful"
+      ],
+      "bpm": 88,
+      "energy": 0.52,
+      "valence": 0.76,
+      "danceability": 0.58,
+      "acousticness": 0.55,
+      "popularity": 0.84,
+      "audioFeatures": {
+        "bpm": 88,
+        "energy": 0.52,
+        "valence": 0.76,
+        "danceability": 0.58,
+        "acousticness": 0.55,
+        "popularity": 0.84
+      }
+    },
+    {
+      "id": "espresso-sabrina-carpenter",
+      "trackNumber": 4,
+      "filename": "Espresso-Sabrina Carpenter.mp3",
+      "title": "Espresso",
+      "primaryArtist": "Sabrina Carpenter",
+      "featuredArtists": [],
+      "artists": [
+        "Sabrina Carpenter"
+      ],
+      "artistDisplay": "Sabrina Carpenter",
+      "album": "Short n' Sweet",
+      "year": 2024,
+      "duration": 175.49,
+      "durationFormatted": "2:55",
+      "bitrateKbps": 320,
+      "sampleRate": 48000,
+      "audioUrl": "songs/Espresso-Sabrina%20Carpenter.mp3",
+      "coverUrl": "Images/Espresso.jpeg",
+      "genre": "Pop",
+      "subgenres": [
+        "Dance Pop",
+        "Nu-Disco",
+        "Synth Pop",
+        "Funk Pop"
+      ],
+      "language": "English",
+      "moods": [
+        "Upbeat",
+        "Feel Good",
+        "Party",
+        "Energetic",
+        "Workout"
+      ],
+      "bpm": 104,
+      "energy": 0.78,
+      "valence": 0.89,
+      "danceability": 0.86,
+      "acousticness": 0.14,
+      "popularity": 0.98,
+      "audioFeatures": {
+        "bpm": 104,
+        "energy": 0.78,
+        "valence": 0.89,
+        "danceability": 0.86,
+        "acousticness": 0.14,
+        "popularity": 0.98
+      }
+    },
+    {
+      "id": "like-that-future",
+      "trackNumber": 5,
+      "filename": "Like That-Future and Metro Boomin.mp3",
+      "title": "Like That",
+      "primaryArtist": "Future",
+      "featuredArtists": [
+        "Metro Boomin",
+        "Kendrick Lamar"
+      ],
+      "artists": [
+        "Future",
+        "Metro Boomin",
+        "Kendrick Lamar"
+      ],
+      "artistDisplay": "Future, Metro Boomin, Kendrick Lamar",
+      "album": "WE DON'T TRUST YOU",
+      "year": 2024,
+      "duration": 267.78,
+      "durationFormatted": "4:28",
+      "bitrateKbps": 320,
+      "sampleRate": 44100,
+      "audioUrl": "songs/Like%20That-Future%20and%20Metro%20Boomin.mp3",
+      "coverUrl": "Images/Like%20That.jpeg",
+      "genre": "Hip-Hop",
+      "subgenres": [
+        "Trap",
+        "Southern Hip-Hop",
+        "Rap",
+        "Hardcore Hip-Hop"
+      ],
+      "language": "English",
+      "moods": [
+        "Upbeat",
+        "Energetic",
+        "Workout",
+        "Party",
+        "Hype"
+      ],
+      "bpm": 162,
+      "energy": 0.89,
+      "valence": 0.54,
+      "danceability": 0.82,
+      "acousticness": 0.06,
+      "popularity": 0.96,
+      "audioFeatures": {
+        "bpm": 162,
+        "energy": 0.89,
+        "valence": 0.54,
+        "danceability": 0.82,
+        "acousticness": 0.06,
+        "popularity": 0.96
+      }
+    },
+    {
+      "id": "matargashti-mohit-chauhan",
+      "trackNumber": 6,
+      "filename": "Matargashti-Mohit Chauhan.mp3",
+      "title": "Matargashti",
+      "primaryArtist": "Mohit Chauhan",
+      "featuredArtists": [
+        "A.R. Rahman"
+      ],
+      "artists": [
+        "Mohit Chauhan",
+        "A.R. Rahman"
+      ],
+      "artistDisplay": "Mohit Chauhan, A.R. Rahman",
+      "album": "Tamasha",
+      "year": 2015,
+      "duration": 328.17,
+      "durationFormatted": "5:28",
+      "bitrateKbps": 320,
+      "sampleRate": 44100,
+      "audioUrl": "songs/Matargashti-Mohit%20Chauhan.mp3",
+      "coverUrl": "Images/Matargashti.jpeg",
+      "genre": "Bollywood Pop",
+      "subgenres": [
+        "Bollywood",
+        "World Fusion",
+        "Upbeat Filmi",
+        "Indie Pop"
+      ],
+      "language": "Hindi",
+      "moods": [
+        "Upbeat",
+        "Feel Good",
+        "Energetic",
+        "Party",
+        "Happy"
+      ],
+      "bpm": 115,
+      "energy": 0.81,
+      "valence": 0.91,
+      "danceability": 0.79,
+      "acousticness": 0.38,
+      "popularity": 0.89,
+      "audioFeatures": {
+        "bpm": 115,
+        "energy": 0.81,
+        "valence": 0.91,
+        "danceability": 0.79,
+        "acousticness": 0.38,
+        "popularity": 0.89
+      }
+    },
+    {
+      "id": "my-eyes-travis-scott",
+      "trackNumber": 7,
+      "filename": "MY EYES-Travis Scott.mp3",
+      "title": "MY EYES",
+      "primaryArtist": "Travis Scott",
+      "featuredArtists": [],
+      "artists": [
+        "Travis Scott"
+      ],
+      "artistDisplay": "Travis Scott",
+      "album": "UTOPIA",
+      "year": 2023,
+      "duration": 251.3,
+      "durationFormatted": "4:11",
+      "bitrateKbps": 192,
+      "sampleRate": 44100,
+      "audioUrl": "songs/MY%20EYES-Travis%20Scott.mp3",
+      "coverUrl": "Images/MY%20EYES.jpeg",
+      "genre": "Hip-Hop",
+      "subgenres": [
+        "Psychedelic Trap",
+        "Alternative Rap",
+        "Experimental Hip-Hop"
+      ],
+      "language": "English",
+      "moods": [
+        "Late Night",
+        "Chill",
+        "Energetic",
+        "Deep Cuts",
+        "Focus"
+      ],
+      "bpm": 119,
+      "energy": 0.71,
+      "valence": 0.39,
+      "danceability": 0.64,
+      "acousticness": 0.28,
+      "popularity": 0.93,
+      "audioFeatures": {
+        "bpm": 119,
+        "energy": 0.71,
+        "valence": 0.39,
+        "danceability": 0.64,
+        "acousticness": 0.28,
+        "popularity": 0.93
+      }
+    },
+    {
+      "id": "not-like-us-kendrick-lamar",
+      "trackNumber": 8,
+      "filename": "Not Like Us-Kendrick Lamar.mp3",
+      "title": "Not Like Us",
+      "primaryArtist": "Kendrick Lamar",
+      "featuredArtists": [],
+      "artists": [
+        "Kendrick Lamar"
+      ],
+      "artistDisplay": "Kendrick Lamar",
+      "album": "Not Like Us (Single)",
+      "year": 2024,
+      "duration": 273.58,
+      "durationFormatted": "4:34",
+      "bitrateKbps": 192,
+      "sampleRate": 44100,
+      "audioUrl": "songs/Not%20Like%20Us-Kendrick%20Lamar.mp3",
+      "coverUrl": "Images/Not%20Like%20Us.jpeg",
+      "genre": "Hip-Hop",
+      "subgenres": [
+        "West Coast Hip-Hop",
+        "Hyphy",
+        "Rap",
+        "Club Rap"
+      ],
+      "language": "English",
+      "moods": [
+        "Upbeat",
+        "Energetic",
+        "Workout",
+        "Party",
+        "Hype"
+      ],
+      "bpm": 101,
+      "energy": 0.88,
+      "valence": 0.77,
+      "danceability": 0.91,
+      "acousticness": 0.05,
+      "popularity": 0.99,
+      "audioFeatures": {
+        "bpm": 101,
+        "energy": 0.88,
+        "valence": 0.77,
+        "danceability": 0.91,
+        "acousticness": 0.05,
+        "popularity": 0.99
+      }
+    },
+    {
+      "id": "softly-karan-aujla",
+      "trackNumber": 9,
+      "filename": "Softly-Karan Aujla.mp3",
+      "title": "Softly",
+      "primaryArtist": "Karan Aujla",
+      "featuredArtists": [],
+      "artists": [
+        "Karan Aujla"
+      ],
+      "artistDisplay": "Karan Aujla",
+      "album": "Making Memories",
+      "year": 2023,
+      "duration": 155.24,
+      "durationFormatted": "2:35",
+      "bitrateKbps": 320,
+      "sampleRate": 44100,
+      "audioUrl": "songs/Softly-Karan%20Aujla.mp3",
+      "coverUrl": "Images/Softly.jpeg",
+      "genre": "Punjabi Pop",
+      "subgenres": [
+        "Punjabi",
+        "Desi Hip-Hop",
+        "R&B Fusion",
+        "Pop"
+      ],
+      "language": "Punjabi",
+      "moods": [
+        "Upbeat",
+        "Chill",
+        "Feel Good",
+        "Party",
+        "Late Night"
+      ],
+      "bpm": 96,
+      "energy": 0.68,
+      "valence": 0.82,
+      "danceability": 0.84,
+      "acousticness": 0.24,
+      "popularity": 0.91,
+      "audioFeatures": {
+        "bpm": 96,
+        "energy": 0.68,
+        "valence": 0.82,
+        "danceability": 0.84,
+        "acousticness": 0.24,
+        "popularity": 0.91
+      }
+    },
+    {
+      "id": "tum-ho-mohit-chauhan",
+      "trackNumber": 10,
+      "filename": "Tum Ho-Mohit Chauhan, Suzanne D'Mello.mp3",
+      "title": "Tum Ho",
+      "primaryArtist": "Mohit Chauhan",
+      "featuredArtists": [
+        "Suzanne D'Mello"
+      ],
+      "artists": [
+        "Mohit Chauhan",
+        "Suzanne D'Mello"
+      ],
+      "artistDisplay": "Mohit Chauhan, Suzanne D'Mello",
+      "album": "Rockstar",
+      "year": 2011,
+      "duration": 318.29,
+      "durationFormatted": "5:18",
+      "bitrateKbps": 320,
+      "sampleRate": 44100,
+      "audioUrl": "songs/Tum%20Ho-Mohit%20Chauhan%2C%20Suzanne%20D'Mello.mp3",
+      "coverUrl": "Images/Tum%20Ho.jpeg",
+      "genre": "Bollywood Soul",
+      "subgenres": [
+        "Bollywood",
+        "Alternative Ballad",
+        "Romantic",
+        "Soft Rock"
+      ],
+      "language": "Hindi",
+      "moods": [
+        "Chill",
+        "Romantic",
+        "Soulful",
+        "Late Night",
+        "Melancholic",
+        "Deep Cuts"
+      ],
+      "bpm": 84,
+      "energy": 0.42,
+      "valence": 0.35,
+      "danceability": 0.41,
+      "acousticness": 0.74,
+      "popularity": 0.9,
+      "audioFeatures": {
+        "bpm": 84,
+        "energy": 0.42,
+        "valence": 0.35,
+        "danceability": 0.41,
+        "acousticness": 0.74,
+        "popularity": 0.9
+      }
+    },
+    {
+      "id": "tum-prem-ho-mohit-lalwani",
+      "trackNumber": 11,
+      "filename": "Tum Prem Ho-Mohit Lalwani, Bharat Kamal.mp3",
+      "title": "Tum Prem Ho",
+      "primaryArtist": "Mohit Lalwani",
+      "featuredArtists": [
+        "Bharat Kamal"
+      ],
+      "artists": [
+        "Mohit Lalwani",
+        "Bharat Kamal"
+      ],
+      "artistDisplay": "Mohit Lalwani, Bharat Kamal",
+      "album": "RadhaKrishn",
+      "year": 2022,
+      "duration": 288.2,
+      "durationFormatted": "4:48",
+      "bitrateKbps": 320,
+      "sampleRate": 44100,
+      "audioUrl": "songs/Tum%20Prem%20Ho-Mohit%20Lalwani%2C%20Bharat%20Kamal.mp3",
+      "coverUrl": "Images/Tum%20Prem%20Ho.jpeg",
+      "genre": "Devotional / Spiritual",
+      "subgenres": [
+        "Indian Classical Fusion",
+        "Devotional",
+        "Acoustic Melody",
+        "Spiritual"
+      ],
+      "language": "Hindi",
+      "moods": [
+        "Chill",
+        "Soulful",
+        "Focus",
+        "Romantic",
+        "Peaceful",
+        "Deep Cuts"
+      ],
+      "bpm": 78,
+      "energy": 0.38,
+      "valence": 0.81,
+      "danceability": 0.43,
+      "acousticness": 0.82,
+      "popularity": 0.79,
+      "audioFeatures": {
+        "bpm": 78,
+        "energy": 0.38,
+        "valence": 0.81,
+        "danceability": 0.43,
+        "acousticness": 0.82,
+        "popularity": 0.79
+      }
+    },
+    {
+      "id": "ve-kamleya-pritam",
+      "trackNumber": 12,
+      "filename": "Ve Kamleya-Pritam, Arijit Singh, Shreya Ghoshal.mp3",
+      "title": "Ve Kamleya",
+      "primaryArtist": "Pritam",
+      "featuredArtists": [
+        "Arijit Singh",
+        "Shreya Ghoshal"
+      ],
+      "artists": [
+        "Pritam",
+        "Arijit Singh",
+        "Shreya Ghoshal"
+      ],
+      "artistDisplay": "Pritam, Arijit Singh, Shreya Ghoshal",
+      "album": "Rocky Aur Rani Kii Prem Kahaani",
+      "year": 2023,
+      "duration": 328.02,
+      "durationFormatted": "5:28",
+      "bitrateKbps": 320,
+      "sampleRate": 48000,
+      "audioUrl": "songs/Ve%20Kamleya-Pritam%2C%20Arijit%20Singh%2C%20Shreya%20Ghoshal.mp3",
+      "coverUrl": "Images/Ve%20Kamleya.jpeg",
+      "genre": "Bollywood Romance",
+      "subgenres": [
+        "Bollywood",
+        "Sufi Romance",
+        "Filmi Ballad",
+        "Melody"
+      ],
+      "language": "Hindi",
+      "moods": [
+        "Romantic",
+        "Soulful",
+        "Chill",
+        "Feel Good",
+        "Melancholic"
+      ],
+      "bpm": 90,
+      "energy": 0.56,
+      "valence": 0.64,
+      "danceability": 0.53,
+      "acousticness": 0.58,
+      "popularity": 0.94,
+      "audioFeatures": {
+        "bpm": 90,
+        "energy": 0.56,
+        "valence": 0.64,
+        "danceability": 0.53,
+        "acousticness": 0.58,
+        "popularity": 0.94
+      }
+    }
+  ]
+}

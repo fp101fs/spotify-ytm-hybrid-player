@@ -1,0 +1,11 @@
+{
+  "name": "spotify-ytm-hybrid-player",
+  "version": "1.0.0",
+  "description": "Static-first Spotify + YouTube Music hybrid web player with smart mixes, dynamic mood tuning, and local audio support",
+  "private": true,
+  "scripts": {
+    "build:catalog": "node scripts/build-catalog.js",
+    "build": "node scripts/build-catalog.js",
+    "test": "node --test tests/*.test.js"
+  }
+}
