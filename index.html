@@ -12,6 +12,7 @@
     <script src="queue.js" defer></script>
     <script src="player.js" defer></script>
     <script src="metadata-lookup.js" defer></script>
+<script src="youtube.js" defer></script>
     <script src="script.js" defer></script>
 </head>
 <body>
@@ -120,6 +121,16 @@
                                         <span class="lib-item-sub" id="lib-local-count">Drop MP3, FLAC or WAV to import</span>
                                     </div>
                                 </button>
+                                <!-- Item 16: public-domain / Creative Commons YouTube videos -->
+                                <button type="button" class="library-item pinned-item" id="lib-youtube" data-collection="youtube">
+                                    <div class="lib-item-art youtube-gradient">
+                                        <svg viewBox="0 0 24 24" fill="#fff" aria-hidden="true"><path d="M21.6 7.2a2.5 2.5 0 0 0-1.76-1.77C18.27 5 12 5 12 5s-6.27 0-7.84.43A2.5 2.5 0 0 0 2.4 7.2 26 26 0 0 0 2 12a26 26 0 0 0 .4 4.8 2.5 2.5 0 0 0 1.76 1.77C5.73 19 12 19 12 19s6.27 0 7.84-.43a2.5 2.5 0 0 0 1.76-1.77A26 26 0 0 0 22 12a26 26 0 0 0-.4-4.8zM10 15V9l5.2 3L10 15z"/></svg>
+                                    </div>
+                                    <div class="lib-item-meta">
+                                        <span class="lib-item-title">YouTube videos</span>
+                                        <span class="lib-item-sub" id="lib-youtube-count">Public-domain music videos</span>
+                                    </div>
+                                </button>
                             </div>
 
                             <!-- User Custom Playlists (Item 11) -->
@@ -216,6 +227,28 @@
                     <button type="button" class="mood-chip" data-mood="Party">Party</button>
                     <button type="button" class="mood-chip" data-mood="Deep Cuts">Deep Cuts</button>
                     <button type="button" class="mood-chip" data-mood="Soulful">Soulful</button>
+                </section>
+
+                <!-- Item 16: YouTube video panel (video follows the audio deck; the sound stays in the normal player) -->
+                <section class="yt-video-panel" id="yt-video-panel" aria-labelledby="yt-video-title" hidden>
+                    <div class="yt-video-head">
+                        <div class="yt-video-meta">
+                            <span class="hero-eyebrow" id="yt-video-eyebrow">VIDEO</span>
+                            <h2 class="yt-video-title" id="yt-video-title" tabindex="-1"></h2>
+                            <p class="yt-video-license" id="yt-video-license"></p>
+                        </div>
+                        <div class="yt-video-actions" role="group" aria-label="Video controls">
+                            <button type="button" class="detail-row-btn" id="yt-video-cc-btn" aria-pressed="false" hidden>Captions</button>
+                            <button type="button" class="detail-row-btn" id="yt-video-fullscreen-btn">Full screen</button>
+                            <a class="detail-row-btn" id="yt-video-watch-link" href="#" target="_blank" rel="noopener noreferrer">Open on YouTube</a>
+                            <button type="button" class="detail-row-btn" id="yt-video-close-btn">Hide video</button>
+                        </div>
+                    </div>
+                    <div class="yt-video-frame" id="yt-video-frame">
+                        <video class="yt-video" id="yt-video" muted playsinline preload="auto" disableremoteplayback aria-label="Music video, muted; the sound plays in the player below"></video>
+                        <div class="yt-embed-slot" id="yt-embed-slot" hidden></div>
+                    </div>
+                    <p class="yt-video-note" id="yt-video-note" role="status" aria-live="polite"></p>
                 </section>
 
                 <!-- Main View Content -->
@@ -410,6 +443,26 @@
                                 <section class="local-sources" id="local-sources" aria-labelledby="local-sources-title" hidden>
                                     <h3 class="local-sources-title" id="local-sources-title" tabindex="-1">Where your songs come from</h3>
                                     <ul class="local-sources-list" id="local-sources-list"></ul>
+                                </section>
+                                <!-- Item 16: add allowlisted YouTube videos -->
+                                <section class="yt-library-panel" id="yt-library-panel" aria-labelledby="yt-add-label" hidden>
+                                    <form class="yt-add-form" id="yt-add-form" novalidate>
+                                        <label class="yt-add-label" id="yt-add-label" for="yt-add-input">Add YouTube video</label>
+                                        <p class="yt-add-help" id="yt-add-help">Paste a YouTube, youtu.be, Shorts or music.youtube.com link. Only videos on this site's public-domain list can play.</p>
+                                        <div class="yt-add-row">
+                                            <input type="text" id="yt-add-input" class="yt-add-input" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://www.youtube.com/watch?v=…" aria-describedby="yt-add-help yt-add-status">
+                                            <button type="submit" class="hero-primary-btn yt-add-btn" id="yt-add-btn">Add</button>
+                                        </div>
+                                        <p class="yt-add-status" id="yt-add-status" role="status" aria-live="polite"></p>
+                                    </form>
+                                    <p class="yt-server-status" id="yt-server-status"></p>
+                                    <div class="yt-available" id="yt-available" hidden>
+                                        <div class="yt-available-head">
+                                            <h3 class="yt-available-title" id="yt-available-title">On the public-domain list</h3>
+                                            <button type="button" class="detail-row-btn" id="yt-add-all-btn">Add all</button>
+                                        </div>
+                                        <ul class="yt-available-list" id="yt-available-list" aria-labelledby="yt-available-title"></ul>
+                                    </div>
                                 </section>
                                 <p class="detail-empty-hint" id="detail-empty-hint" hidden></p>
                             </div>
@@ -793,6 +846,10 @@
             </div>
 
             <div class="right-section">
+                <button type="button" class="icon-btn playbar-video-btn" id="playbar-video-btn" aria-pressed="false" aria-controls="yt-video-panel" title="Show the music video" hidden>
+                    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1.5 3.5A1.5 1.5 0 0 1 3 2h7a1.5 1.5 0 0 1 1.5 1.5v1.38l2.88-1.66A.75.75 0 0 1 15.5 3.87v8.26a.75.75 0 0 1-1.12.65L11.5 11.12v1.38A1.5 1.5 0 0 1 10 14H3a1.5 1.5 0 0 1-1.5-1.5v-9z"/></svg>
+                    <span class="playbar-video-label">Video</span>
+                </button>
                 <button type="button" class="crossfade-pill" id="crossfade-badge" title="Click to cycle Crossfade (0–12s) or Shift-click for Audio Engine settings">
                     <span>XFADE 0s</span>
                 </button>

@@ -81,7 +81,7 @@ function memoryStore() {
 const noProbe = async () => 0;
 
 function createShellSandbox(options = {}) {
-    const files = ["storage.js", "library.js", "recommender.js", "queue.js", "player.js", "metadata-lookup.js", "script.js"].map((f) =>
+    const files = ["storage.js", "library.js", "recommender.js", "queue.js", "player.js", "metadata-lookup.js", "youtube.js", "script.js"].map((f) =>
         fs.readFileSync(path.join(ROOT_DIR, f), "utf8")
     );
     const elementsById = new Map();
@@ -98,6 +98,7 @@ function createShellSandbox(options = {}) {
                 "local-sources", "add-music-source-items",
                 "settings-dialog", "match-review-dialog", "lookup-progress", "detail-lookup-btn", "detail-review-matches-btn",
                 "settings-lookup-note", "match-review-empty", "match-review-overwrite-wrap",
+                "yt-library-panel", "yt-video-panel", "yt-embed-slot", "playbar-video-btn", "yt-available", "yt-video-cc-btn",
             ].includes(id),
             textContent: "",
             innerHTML: "",
@@ -176,7 +177,8 @@ function createShellSandbox(options = {}) {
         console,
         setTimeout: () => 0,
         clearTimeout: () => {},
-        URL: { createObjectURL: (f) => `blob:sandbox/${f && f.name}`, revokeObjectURL() {} },
+        URL: Object.assign(class extends URL {}, { createObjectURL: (f) => `blob:sandbox/${f && f.name}`, revokeObjectURL() {} }),
+        URLSearchParams,
         navigator: { userAgent: options.userAgent || "Mozilla/5.0 (Macintosh) Chrome/130", maxTouchPoints: 0 },
         Audio: function () {
             this.paused = true;

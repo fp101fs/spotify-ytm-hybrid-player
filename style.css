@@ -4738,3 +4738,336 @@ span.detail-track-cover.import-shimmer {
     opacity: 0.6;
     cursor: progress;
 }
+
+/* ==================== Item 16: YouTube public-domain music videos ==================== */
+
+.youtube-gradient {
+    background: linear-gradient(135deg, #ff0033, #7a0019);
+}
+
+.yt-library-panel {
+    margin-block-start: 16px;
+    inline-size: min(100%, 640px);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.yt-library-panel[hidden],
+.yt-video-panel[hidden],
+.yt-available[hidden],
+.yt-embed-slot[hidden],
+.playbar-video-btn[hidden],
+.yt-video[hidden] {
+    display: none;
+}
+
+.yt-add-form {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.yt-add-label {
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+}
+
+.yt-add-help,
+.yt-server-status {
+    margin: 0;
+    font-size: 0.85rem;
+    line-height: 1.45;
+    color: var(--text-secondary);
+}
+
+.yt-server-status.is-warning {
+    color: #ffd27a;
+}
+
+.yt-add-row {
+    display: flex;
+    gap: 8px;
+    align-items: stretch;
+}
+
+.yt-add-input {
+    flex: 1;
+    min-inline-size: 0;
+    min-block-size: 44px;
+    padding: 0 12px;
+    border-radius: var(--radius-md);
+    border: 1px solid #8a8a8a;
+    background-color: #1f1f1f;
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 0.95rem;
+}
+
+.yt-add-input:focus-visible,
+.yt-add-btn:focus-visible,
+.playbar-video-btn:focus-visible,
+.yt-video-actions .detail-row-btn:focus-visible,
+.yt-available-item .detail-row-btn:focus-visible,
+.yt-license-link:focus-visible,
+.yt-video-license a:focus-visible,
+#yt-add-all-btn:focus-visible {
+    outline: 2px solid #fff;
+    outline-offset: 2px;
+}
+
+.yt-add-input[aria-invalid="true"] {
+    border-color: #ff6b81;
+}
+
+.yt-add-btn {
+    min-block-size: 44px;
+    min-inline-size: 72px;
+    justify-content: center;
+}
+
+.yt-add-status {
+    margin: 0;
+    min-block-size: 1.2em;
+    font-size: 0.88rem;
+    line-height: 1.45;
+    color: var(--accent-spotify);
+}
+
+.yt-add-status.is-error {
+    color: #ff8a9b;
+}
+
+.yt-available-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-block-end: 8px;
+}
+
+.yt-available-title {
+    margin: 0;
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+}
+
+.yt-available-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.yt-available-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px;
+    border-radius: var(--radius-md);
+    background-color: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border-subtle);
+}
+
+.yt-available-thumb {
+    inline-size: 64px;
+    block-size: 36px;
+    object-fit: cover;
+    border-radius: 4px;
+    flex-shrink: 0;
+    background-color: #222;
+}
+
+.yt-available-meta {
+    flex: 1;
+    min-inline-size: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.yt-available-name {
+    font-weight: 700;
+    color: var(--text-primary);
+    overflow-wrap: anywhere;
+}
+
+.yt-available-sub {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    overflow-wrap: anywhere;
+}
+
+.yt-license-link,
+.yt-video-license a {
+    color: var(--text-primary);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.yt-available-item .detail-row-btn,
+#yt-add-all-btn,
+.yt-video-actions .detail-row-btn {
+    min-block-size: 36px;
+    min-inline-size: 44px;
+    font-size: 0.8rem;
+    color: var(--text-primary);
+}
+
+.yt-video-actions a.detail-row-btn {
+    display: inline-flex;
+    align-items: center;
+    text-decoration: none;
+}
+
+.yt-video-actions .detail-row-btn[aria-pressed="true"] {
+    background-color: rgba(30, 215, 96, 0.18);
+    border-color: var(--accent-spotify);
+}
+
+/* Video panel: sits above the main view, the sound stays in the playbar */
+.yt-video-panel {
+    flex-shrink: 0;
+    /* below the sticky navbar + mood chips when scrolled into view */
+    scroll-margin-block-start: 124px;
+    margin: 0 16px 12px;
+    padding: 12px;
+    border-radius: var(--radius-lg);
+    background-color: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.yt-video-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px 16px;
+}
+
+.yt-video-meta {
+    min-inline-size: 0;
+    flex: 1 1 240px;
+}
+
+.yt-video-title {
+    margin: 2px 0 0;
+    font-size: 1rem;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+}
+
+.yt-video-title:focus-visible {
+    outline: 2px solid #fff;
+    outline-offset: 2px;
+}
+
+.yt-video-license,
+.yt-video-note {
+    margin: 2px 0 0;
+    font-size: 0.8rem;
+    line-height: 1.45;
+    color: var(--text-secondary);
+}
+
+.yt-video-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.yt-video-frame {
+    position: relative;
+    inline-size: 100%;
+    max-inline-size: 960px;
+    aspect-ratio: 16 / 9;
+    max-block-size: 48vh;
+    margin-inline: auto;
+    background-color: #000;
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+.yt-video,
+.yt-embed-slot,
+.yt-embed {
+    position: absolute;
+    inset: 0;
+    inline-size: 100%;
+    block-size: 100%;
+    border: 0;
+}
+
+.yt-video {
+    object-fit: contain;
+    background-color: #000;
+}
+
+.yt-video-frame:fullscreen {
+    max-inline-size: none;
+    max-block-size: none;
+    border-radius: 0;
+}
+
+.playbar-video-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-block-size: 32px;
+    padding: 0 10px;
+    border-radius: var(--radius-pill);
+    border: 1px solid var(--border-highlight);
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    font-weight: 700;
+}
+
+.playbar-video-btn svg {
+    inline-size: 16px;
+    block-size: 16px;
+}
+
+.playbar-video-btn[aria-pressed="true"] {
+    color: var(--accent-spotify);
+    border-color: var(--accent-spotify);
+}
+
+@media (max-width: 740px) {
+    .yt-video-panel {
+        margin: 0 8px 8px;
+        padding: 8px;
+    }
+
+    .yt-video-frame {
+        max-block-size: 40vh;
+    }
+
+    .yt-add-btn,
+    .yt-available-item .detail-row-btn,
+    #yt-add-all-btn,
+    .yt-video-actions .detail-row-btn,
+    .playbar-video-btn {
+        min-block-size: 44px;
+        min-inline-size: 44px;
+    }
+
+    .playbar-video-label {
+        position: absolute;
+        inline-size: 1px;
+        block-size: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        white-space: nowrap;
+    }
+}

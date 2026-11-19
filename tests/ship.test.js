@@ -26,7 +26,9 @@ test("vercel.json builds the catalog and serves the repo root statically", () =>
     assert.strictEqual(cfg.framework, null);
     const pkg = JSON.parse(read("package.json"));
     assert.strictEqual(pkg.scripts.build, cfg.buildCommand);
-    assert.ok(!pkg.dependencies, "no runtime dependencies to install");
+    // Item 16: the only runtime dependency is the YouTube library, pinned to an exact version
+    assert.deepStrictEqual(Object.keys(pkg.dependencies || {}), ["@distube/ytdl-core"]);
+    assert.match(pkg.dependencies["@distube/ytdl-core"], /^\d+\.\d+\.\d+$/, "exact version");
 });
 
 test(".vercelignore keeps build inputs and the app files deployed", () => {

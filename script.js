@@ -21,7 +21,7 @@ let activeDetail = null;
 let activeSearchCategory = "all";
 let activeSearchResults = null;
 let activeHomeShelvesData = null;
-const COLLECTION_DETAIL_TYPES = ["playlist", "liked", "local"];
+const COLLECTION_DETAIL_TYPES = ["playlist", "liked", "local", "youtube"];
 
 function getStorage() {
     if (typeof window !== "undefined" && window.SpotTubeStorage) {
@@ -252,6 +252,9 @@ async function getSongs() {
         }
     }
 
+    // Item 16: YouTube videos this browser added (from yt-allowlist.json)
+    await loadYouTubeCatalog(baseTracks);
+
     return baseTracks;
 }
 
@@ -260,7 +263,9 @@ function resolveTrackIndex(trackOrIndex) {
         return Math.max(0, Math.min(songs.length - 1, trackOrIndex));
     }
     if (trackOrIndex && typeof trackOrIndex === "object") {
-        const idx = songs.findIndex((t) => t.id === trackOrIndex.id || t.filename === trackOrIndex.filename);
+        // Item 16: YouTube tracks have no filename, so only compare filenames that exist
+        const { id, filename } = trackOrIndex;
+        const idx = songs.findIndex((t) => (id && t.id === id) || (filename && t.filename === filename));
         return idx !== -1 ? idx : 0;
     }
     if (typeof trackOrIndex === "string") {
@@ -316,6 +321,7 @@ function syncActiveTrackUI() {
     renderDrawerTrackInfo(track);
     renderHomeShelves();
     syncCrossfadeUI();
+    updateYouTubeForTrack(track);
 
     // 5. Highlight active track rows/cards if Detail View or Omni-Search View is currently open
     if (activeView === "detail" && activeDetail) {
@@ -374,6 +380,15 @@ const playMusic = (trackOrIndex, pause = false, options = {}) => {
             durationSeconds: prevDuration,
             endedNaturally: false,
         });
+    }
+
+    // Item 16: without the server a YouTube video can only be watched in YouTube's own player
+    if (isYouTubeTrack(track) && ytApiState.status === "missing" && !pause) {
+        currentTrackIndex = nextIndex;
+        updatePlaybarTrackMeta(track);
+        syncActiveTrackUI();
+        openYouTubeEmbed(track, { withSound: true });
+        return;
     }
 
     currentTrackIndex = nextIndex;
@@ -1494,10 +1509,15 @@ function renderDrawerTrackInfo(track) {
     if (coverEl) coverEl.src = track.coverUrl;
     if (titleEl) titleEl.textContent = track.title;
     if (artistsEl) artistsEl.textContent = track.artistDisplay;
-    if (albumYearEl) albumYearEl.textContent = `${track.album || "Single"} • ${track.year || 2024}`;
+    if (albumYearEl) {
+        albumYearEl.textContent =
+            track.source === "youtube"
+                ? `${track.album || "YouTube"}${track.year ? ` • ${track.year}` : ""} • ${track.license || "YouTube"}`
+                : `${track.album || "Single"} • ${track.year || 2024}`;
+    }
     if (genreEl) genreEl.textContent = track.genre || "Pop";
     if (langEl) langEl.textContent = track.language || "English";
-    if (qualityEl) qualityEl.textContent = `${track.bitrateKbps || 320} kbps`;
+    if (qualityEl) qualityEl.textContent = track.source === "youtube" ? "YouTube · AAC" : `${track.bitrateKbps || 320} kbps`;
 
     if (moodTagsEl) {
         const moods = Array.isArray(track.moods) ? track.moods : ["Chill"];
@@ -6803,6 +6823,20 @@ function bindAudioDeckListeners(deckEl) {
         if (pe && typeof pe.evaluatePlaybackTick === "function") {
             pe.evaluatePlaybackTick(currentSong.currentTime, totalDuration);
         }
+        syncYouTubeVideo();
+    });
+
+    // Item 16: the muted music video follows this deck; a YouTube stream that fails gets a clear message
+    for (const type of ["play", "pause", "seeked", "ratechange"]) {
+        deckEl.addEventListener(type, () => {
+            if (deckEl === currentSong) syncYouTubeVideo();
+        });
+    }
+    deckEl.addEventListener("error", () => {
+        const track = songs[currentTrackIndex];
+        if (deckEl !== currentSong || !isYouTubeTrack(track)) return;
+        if (!String(deckEl.src || "").includes("api/yt/stream")) return;
+        handleYouTubePlaybackError(track);
     });
 
     deckEl.addEventListener("ended", () => {
@@ -6869,6 +6903,8 @@ async function main() {
     initShellControls();
     initLibraryImportControls();
     await initFolderSources();
+    initYouTubeControls();
+    checkYouTubeApi();
     playMusic(0, true);
 
     const playBtn = document.getElementById("play");
@@ -7421,6 +7457,16 @@ function buildCollectionDetailData(spec = {}) {
         tracklistTitle = "Liked Songs";
         mixLabel = "Start Liked Mix";
         emptyHint = "Songs you like will appear here. Tap ♡ on any song or press F while it plays.";
+    } else if (type === "youtube") {
+        tracks = getYouTubeTracks();
+        id = "youtube";
+        title = "YouTube videos";
+        description = "Public-domain and Creative Commons music videos. They play in the normal player; turn on Video to watch.";
+        badge = "YOUTUBE";
+        eyebrow = "PUBLIC DOMAIN & CREATIVE COMMONS";
+        tracklistTitle = "Your YouTube videos";
+        mixLabel = "Start YouTube Mix";
+        emptyHint = "No videos yet. Paste a link above or add one from the public-domain list.";
     } else {
         // Newest first, so a folder being added shows at the top of the list while its tags fill in
         tracks = getImportedLocalTracks()
@@ -7514,7 +7560,14 @@ function buildCollectionDetailData(spec = {}) {
             type: "playlist",
             id: `collection-${id}`,
             smartMixId: `collection-${id}`,
-            badge: type === "local" ? "LOCAL FILES MIX" : type === "liked" ? "LIKED SONGS MIX" : "PLAYLIST RADIO",
+            badge:
+                type === "local"
+                    ? "LOCAL FILES MIX"
+                    : type === "liked"
+                      ? "LIKED SONGS MIX"
+                      : type === "youtube"
+                        ? "YOUTUBE MIX"
+                        : "PLAYLIST RADIO",
             label: `${title} Radio`,
             tracks: seedTracks,
         },
@@ -7573,6 +7626,7 @@ function renderDetailCollectionChrome(detailData) {
     updateImportProgressUi();
     renderLocalSourcesPanel();
     updateLookupUi();
+    renderYouTubeLibraryPanel();
     if (similarSection) similarSection.hidden = isCollection && !(detailData.similarTracks || []).length;
 }
 
@@ -7584,6 +7638,12 @@ function buildCollectionRowActionsHtml(track, idx, collection) {
             <button type="button" class="detail-row-btn" data-detail-track-action="playlist-up" title="Move ${title} up" aria-label="Move ${title} up">↑</button>
             <button type="button" class="detail-row-btn" data-detail-track-action="playlist-down" title="Move ${title} down" aria-label="Move ${title} down">↓</button>
             <button type="button" class="detail-row-btn danger-btn" data-detail-track-action="playlist-remove" title="Remove ${title} from this playlist">
+                <span>Remove</span>
+            </button>`;
+    }
+    if (collection.type === "youtube" && track.source === "youtube") {
+        return `
+            <button type="button" class="detail-row-btn danger-btn" data-detail-track-action="remove-youtube" title="Remove ${title} from YouTube videos" aria-label="Remove ${title} from YouTube videos">
                 <span>Remove</span>
             </button>`;
     }
@@ -7618,6 +7678,12 @@ function handleCollectionRowAction(action, track, idx, collection) {
             removeTrackFromUserPlaylist(collection.id, track.id);
             return true;
         }
+    }
+    if (action === "remove-youtube") {
+        removeYouTubeVideo(track.id);
+        const heading = document.getElementById("detail-heading");
+        if (heading && typeof heading.focus === "function") heading.focus();
+        return true;
     }
     if (action === "remove-import") {
         removeImportedTrack(track.id);
@@ -8402,7 +8468,9 @@ function isTrackWaitingForFolder(track) {
 
 let queueCatalogCache = { songsRef: null, length: -1, statusKey: "", catalog: null };
 function getQueueCatalog() {
-    const statusKey = Array.from(folderSourceStatus.entries()).map(([k, v]) => `${k}:${v}`).join(",");
+    const statusKey =
+        Array.from(folderSourceStatus.entries()).map(([k, v]) => `${k}:${v}`).join(",") +
+        `|yt:${ytApiState.status}:${ytFailedTrackIds.size}`;
     if (
         queueCatalogCache.songsRef === songs &&
         queueCatalogCache.length === songs.length &&
@@ -8410,8 +8478,10 @@ function getQueueCatalog() {
     ) {
         return queueCatalogCache.catalog;
     }
-    const waiting = songs.some(isTrackWaitingForFolder);
-    const catalog = waiting ? songs.filter((t) => !isTrackWaitingForFolder(t)) : songs;
+    // Item 16: YouTube tracks need the server (and leave mixes after failing this session)
+    const unplayable = (t) => isTrackWaitingForFolder(t) || isYouTubeTrackUnplayable(t);
+    const waiting = songs.some(unplayable);
+    const catalog = waiting ? songs.filter((t) => !unplayable(t)) : songs;
     queueCatalogCache = { songsRef: songs, length: songs.length, statusKey, catalog };
     return catalog;
 }
@@ -9411,7 +9481,667 @@ function initMetadataLookupControls() {
     updateLookupUi();
 }
 
+// ==================== Item 16: YouTube public-domain music videos ====================
+// Videos on yt-allowlist.json can be added as catalog tracks (`source: "youtube"`). Their audio comes from the
+// same-origin proxy (api/yt/stream) through the normal decks, so crossfade, mixes and MediaSession work as for any
+// song. "Video" in the playbar shows a muted <video> that follows the playing deck. Only the video IDs the user
+// added are kept on the device (preferences); nothing else from YouTube is stored.
+
+let ytAllowlist = []; // validated entries from yt-allowlist.json
+let ytApiState = { status: "unknown", message: "" }; // "unknown" | "ok" | "missing"
+const ytFailedTrackIds = new Set(); // failed this session: left out of mixes until reload
+let ytVideoWanted = false; // the user turned Video on; it reopens for the next YouTube track
+let ytVideo = { open: false, mode: "video", trackId: null, withSound: false, captions: [], captionsOn: false, token: 0 };
+let ytErrorShownFor = null;
+
+function getYouTubeModule() {
+    return (typeof window !== "undefined" && window.SpotTubeYouTube) || (typeof globalThis !== "undefined" && globalThis.SpotTubeYouTube) || null;
+}
+
+function isYouTubeTrack(track) {
+    const YT = getYouTubeModule();
+    return Boolean(YT && YT.isYouTubeTrack(track));
+}
+
+function getAddedYouTubeIds() {
+    const store = getStorage();
+    const prefs = store && typeof store.getPreferences === "function" ? store.getPreferences() : null;
+    return Array.isArray(prefs && prefs.youtubeVideoIds) ? prefs.youtubeVideoIds.filter((id) => typeof id === "string") : [];
+}
+
+function setAddedYouTubeIds(ids) {
+    const store = getStorage();
+    if (store && typeof store.setPreferences === "function") store.setPreferences({ youtubeVideoIds: Array.from(new Set(ids)) });
+}
+
+function getYouTubeTracks() {
+    return songs.filter((t) => t && t.source === "youtube");
+}
+
+/** Called from getSongs(): reads yt-allowlist.json and adds the videos this browser added before. */
+async function loadYouTubeCatalog(baseTracks) {
+    const YT = getYouTubeModule();
+    if (!YT) return [];
+    try {
+        const res = await fetch("./yt-allowlist.json");
+        if (!res.ok) return [];
+        const { entries, errors } = YT.validateAllowlist(await res.json());
+        if (errors.length) console.warn("[yt] yt-allowlist.json entries left out:", errors);
+        ytAllowlist = entries;
+    } catch (err) {
+        ytAllowlist = [];
+        return [];
+    }
+    const byId = new Map(ytAllowlist.map((e) => [e.id, e]));
+    const existing = new Set(baseTracks.map((t) => t.id));
+    const added = [];
+    for (const id of getAddedYouTubeIds()) {
+        const entry = byId.get(id);
+        if (!entry) continue; // taken off the list since: not played any more
+        const track = YT.buildYouTubeTrack(entry);
+        if (existing.has(track.id)) continue;
+        baseTracks.push(track);
+        existing.add(track.id);
+        added.push(track);
+    }
+    return added;
+}
+
+/** Asks the server whether /api/yt is there (dev server or Vercel). Static hosting → "missing". */
+async function checkYouTubeApi(options = {}) {
+    let status = "missing";
+    let controller = null;
+    let timer = null;
+    try {
+        controller = typeof AbortController === "function" ? new AbortController() : null;
+        if (controller && typeof setTimeout === "function") timer = setTimeout(() => controller.abort(), options.timeoutMs || 6000);
+        const res = await fetch("./api/yt/status", controller ? { signal: controller.signal, cache: "no-store" } : undefined);
+        const type = res.headers && typeof res.headers.get === "function" ? res.headers.get("content-type") || "" : "application/json";
+        if (res.ok && /json/.test(type)) {
+            const body = await res.json();
+            if (body && body.ok === true) status = "ok";
+        }
+    } catch (_) {
+        status = "missing";
+    } finally {
+        if (timer && typeof clearTimeout === "function") clearTimeout(timer);
+    }
+    setYouTubeApiStatus(status);
+    return status;
+}
+
+function setYouTubeApiStatus(status) {
+    const before = ytApiState.status;
+    ytApiState = { status, message: status === "missing" ? getYouTubeModule()?.describeYtError("NO_SERVER") || "" : "" };
+    if (before !== status) {
+        syncQueueCatalog();
+        renderYouTubeLibraryPanel();
+        updateYouTubeCount();
+    }
+}
+
+/** YouTube tracks can't autoplay without the API, or after they failed this session. */
+function isYouTubeTrackUnplayable(track) {
+    return isYouTubeTrack(track) && (ytApiState.status === "missing" || ytFailedTrackIds.has(track.id));
+}
+
+function updateYouTubeCount() {
+    const el = document.getElementById("lib-youtube-count");
+    if (!el) return;
+    const n = getYouTubeTracks().length;
+    const base = n > 0 ? `YouTube • ${n} ${n === 1 ? "video" : "videos"}` : "Public-domain music videos";
+    el.textContent = ytApiState.status === "missing" && n > 0 ? `${base} · server off` : base;
+}
+
+function findAllowlistEntry(id) {
+    return ytAllowlist.find((e) => e.id === id) || null;
+}
+
+/**
+ * The "Add YouTube video" box. Returns { status: "added" | "exists" | "not-allowed" | "invalid", message, track? }.
+ */
+function addYouTubeVideo(input, options = {}) {
+    const YT = getYouTubeModule();
+    if (!YT) return { status: "invalid", message: "YouTube support didn't load." };
+    const id = YT.parseYouTubeId(String(input || ""));
+    if (!id) return { status: "invalid", message: YT.describeYtError("INVALID_ID") };
+    const entry = findAllowlistEntry(id);
+    if (!entry) {
+        return {
+            status: "not-allowed",
+            id,
+            message: `Video ${id} isn't on this site's public-domain list, so it can't be added. To add it, put its ID, title, artist, license (Public domain, CC0 or CC BY) and a link that shows the license in yt-allowlist.json, then reload.`,
+        };
+    }
+    const existing = songs.find((t) => t.youtubeId === id && t.source === "youtube");
+    if (existing) return { status: "exists", track: existing, message: `“${existing.title}” is already in YouTube videos.` };
+    const track = YT.buildYouTubeTrack(entry);
+    songs.push(track);
+    setAddedYouTubeIds([...getAddedYouTubeIds(), id]);
+    if (!options.skipRefresh) {
+        refreshLibraryViews();
+        updateYouTubeCount();
+    }
+    return { status: "added", track, message: `Added “${track.title}” by ${track.artistDisplay} (${track.license}).` };
+}
+
+function addAllYouTubeVideos() {
+    const added = [];
+    for (const entry of ytAllowlist) {
+        const r = addYouTubeVideo(entry.id, { skipRefresh: true });
+        if (r.status === "added") added.push(r.track);
+    }
+    if (added.length) {
+        refreshLibraryViews();
+        updateYouTubeCount();
+    }
+    return added;
+}
+
+function removeYouTubeVideo(trackId) {
+    const track = songs.find((t) => t.id === trackId && t.source === "youtube");
+    if (!track) return false;
+    setAddedYouTubeIds(getAddedYouTubeIds().filter((id) => id !== track.youtubeId));
+    if (ytVideo.trackId === track.id) closeYouTubeVideo({ keepWanted: true });
+    removeTracksFromCatalog([track.id]);
+    refreshLibraryViews();
+    updateYouTubeCount();
+    setYouTubeAddStatus(`Removed “${track.title}” from YouTube videos.`);
+    return true;
+}
+
+function openYouTubeDetail(options = {}) {
+    return openDetailView({ type: "youtube" }, options);
+}
+
+function setYouTubeAddStatus(message, options = {}) {
+    const status = document.getElementById("yt-add-status");
+    if (status) {
+        status.textContent = message || "";
+        status.classList.toggle("is-error", Boolean(options.error));
+    }
+    const input = document.getElementById("yt-add-input");
+    if (input) {
+        if (options.error) input.setAttribute("aria-invalid", "true");
+        else input.removeAttribute("aria-invalid");
+    }
+}
+
+function submitYouTubeAddForm() {
+    const input = document.getElementById("yt-add-input");
+    const value = input ? input.value : "";
+    if (!String(value).trim()) {
+        setYouTubeAddStatus("Paste a YouTube link first.", { error: true });
+        if (input) input.focus();
+        return { status: "invalid" };
+    }
+    const result = addYouTubeVideo(value);
+    const ok = result.status === "added" || result.status === "exists";
+    setYouTubeAddStatus(result.message, { error: !ok });
+    if (ok && input) input.value = "";
+    if (input) input.focus();
+    return result;
+}
+
+function renderYouTubeLibraryPanel() {
+    const panel = document.getElementById("yt-library-panel");
+    if (!panel) return;
+    const isYouTubeView = activeView === "detail" && activeDetail && activeDetail.type === "youtube";
+    panel.hidden = !isYouTubeView;
+    if (!isYouTubeView) return;
+
+    const serverEl = document.getElementById("yt-server-status");
+    if (serverEl) {
+        serverEl.classList.toggle("is-warning", ytApiState.status === "missing");
+        serverEl.textContent =
+            ytApiState.status === "ok"
+                ? "Sound plays through this site's server, so crossfade and mixes work. Turn on Video in the player to watch."
+                : ytApiState.status === "missing"
+                  ? ytApiState.message
+                  : "Checking for the app's YouTube server…";
+    }
+
+    const added = new Set(getYouTubeTracks().map((t) => t.youtubeId));
+    const available = ytAllowlist.filter((e) => !added.has(e.id));
+    const wrap = document.getElementById("yt-available");
+    const list = document.getElementById("yt-available-list");
+    const addAll = document.getElementById("yt-add-all-btn");
+    if (wrap) wrap.hidden = available.length === 0;
+    if (addAll) addAll.hidden = available.length < 2;
+    if (!list) return;
+    const nodes = available.map((entry) => {
+        const li = document.createElement("li");
+        li.className = "yt-available-item";
+        li.dataset.youtubeId = entry.id;
+        const title = escapeHtml(entry.title);
+        const artist = escapeHtml(entry.artist);
+        const duration = entry.duration ? secondsToMinutesSeconds(entry.duration) : "";
+        li.innerHTML = `
+            <img class="yt-available-thumb" alt="" loading="lazy" decoding="async">
+            <div class="yt-available-meta">
+                <span class="yt-available-name">${title}</span>
+                <span class="yt-available-sub">${artist}${duration ? ` · ${duration}` : ""} · <a href="" target="_blank" rel="noopener noreferrer" class="yt-license-link">${escapeHtml(entry.license)}</a></span>
+            </div>
+            <button type="button" class="detail-row-btn" data-yt-add="${escapeHtml(entry.id)}" aria-label="Add ${title} by ${artist}">Add</button>`;
+        const img = li.querySelector("img");
+        if (img) img.src = getYouTubeModule().thumbnailUrl(entry.id);
+        const link = li.querySelector("a");
+        if (link) {
+            link.href = entry.source;
+            link.setAttribute("aria-label", `${entry.license}: license source for ${entry.title} (opens in a new tab)`);
+        }
+        return li;
+    });
+    list.replaceChildren(...nodes);
+}
+
+function handleYouTubeAvailableClick(event) {
+    const btn = event && event.target && typeof event.target.closest === "function" ? event.target.closest("[data-yt-add]") : null;
+    if (!btn) return;
+    const id = btn.dataset.ytAdd;
+    const list = document.getElementById("yt-available-list");
+    const buttons = list ? Array.from(list.querySelectorAll("[data-yt-add]")) : [];
+    const idx = buttons.indexOf(btn);
+    const result = addYouTubeVideo(id);
+    setYouTubeAddStatus(result.message, { error: result.status !== "added" && result.status !== "exists" });
+    // Keep keyboard users in the list: focus the next Add button, else the add box
+    const after = list ? Array.from(list.querySelectorAll("[data-yt-add]")) : [];
+    const next = after[Math.min(Math.max(idx, 0), after.length - 1)] || document.getElementById("yt-add-input");
+    if (next && typeof next.focus === "function") next.focus();
+}
+
+// ---------- video panel ----------
+
+function getYouTubeVideoEl() {
+    return document.getElementById("yt-video");
+}
+
+function updateYouTubeToggle(track = songs[currentTrackIndex]) {
+    const btn = document.getElementById("playbar-video-btn");
+    if (!btn) return;
+    const show = isYouTubeTrack(track);
+    btn.hidden = !show;
+    const on = show && ytVideo.open && ytVideo.trackId === track.id;
+    btn.setAttribute("aria-pressed", String(on));
+    btn.classList.toggle("active", on);
+    btn.title = on ? "Hide the music video" : "Show the music video";
+}
+
+/** Track changed (syncActiveTrackUI): reopen the video for the next YouTube track, hide it for other songs. */
+function updateYouTubeForTrack(track) {
+    if (isYouTubeTrack(track)) {
+        if (ytVideoWanted && (!ytVideo.open || ytVideo.trackId !== track.id)) {
+            openYouTubeVideo(track, { quiet: true });
+        }
+    } else if (ytVideo.open) {
+        closeYouTubeVideo({ keepWanted: true });
+    }
+    updateYouTubeToggle(track);
+}
+
+function describeYouTubeLicense(track) {
+    const parts = [`${track.title} by ${track.artistDisplay}`];
+    if (track.license) parts.push(track.license);
+    return parts.join(" · ");
+}
+
+function setYouTubeNote(text) {
+    const note = document.getElementById("yt-video-note");
+    if (note) note.textContent = text || "";
+}
+
+/** Opens the video panel for `track` (the playing YouTube track). mode "video" = muted <video> synced to the deck. */
+function openYouTubeVideo(track = songs[currentTrackIndex], options = {}) {
+    const YT = getYouTubeModule();
+    if (!YT || !isYouTubeTrack(track)) return false;
+    if (ytApiState.status === "missing" || options.embed) {
+        return openYouTubeEmbed(track, { withSound: options.withSound ?? ytApiState.status === "missing", reason: options.reason });
+    }
+    const panel = document.getElementById("yt-video-panel");
+    const video = getYouTubeVideoEl();
+    if (!panel || !video) return false;
+    ytVideoWanted = true;
+    const token = ++ytVideo.token;
+    ytVideo = { open: true, mode: "video", trackId: track.id, withSound: false, captions: [], captionsOn: false, token };
+    renderYouTubePanelChrome(track);
+    clearYouTubeEmbed();
+    video.hidden = false;
+    // Remove old caption tracks before switching source
+    if (typeof video.querySelectorAll === "function") video.querySelectorAll("track").forEach((t) => t.remove());
+    video.muted = true;
+    video.src = track.videoUrl || YT.streamUrl(track.youtubeId, "video");
+    if (typeof video.load === "function") video.load();
+    setYouTubeNote("The sound keeps playing in the player below; the video follows it.");
+    panel.hidden = false;
+    updateYouTubeToggle(track);
+    loadYouTubeCaptions(track, token);
+    if (!options.quiet) revealYouTubePanel();
+    if (!options.quiet && options.focus) focusYouTubePanel();
+    return true;
+}
+
+function renderYouTubePanelChrome(track) {
+    const title = document.getElementById("yt-video-title");
+    if (title) title.textContent = `${track.title} — ${track.artistDisplay}`;
+    const license = document.getElementById("yt-video-license");
+    if (license) {
+        license.textContent = "";
+        const text = document.createElement("span");
+        text.textContent = `${track.license || "License unknown"}${track.channel ? ` · uploaded by ${track.channel}` : ""} · `;
+        const link = document.createElement("a");
+        link.href = track.sourceUrl || track.watchUrl;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = "license source";
+        link.setAttribute("aria-label", `License source for ${track.title} (opens in a new tab)`);
+        license.append(text, link);
+    }
+    const watch = document.getElementById("yt-video-watch-link");
+    if (watch) {
+        watch.href = track.watchUrl;
+        watch.setAttribute("aria-label", `Open ${track.title} on YouTube (opens in a new tab)`);
+    }
+    const cc = document.getElementById("yt-video-cc-btn");
+    if (cc) {
+        cc.hidden = true;
+        cc.setAttribute("aria-pressed", "false");
+    }
+}
+
+async function loadYouTubeCaptions(track, token) {
+    let info = null;
+    try {
+        const res = await fetch(`./api/yt/info?id=${encodeURIComponent(track.youtubeId)}`);
+        info = await res.json();
+        if (!res.ok) throw Object.assign(new Error("info failed"), { body: info });
+    } catch (err) {
+        if (token !== ytVideo.token) return;
+        const code = err && err.body && err.body.error ? err.body.error.code : "UPSTREAM";
+        showYouTubeVideoError(track, code);
+        return;
+    }
+    if (token !== ytVideo.token || !info || !Array.isArray(info.captions) || !info.captions.length) return;
+    // Prefer captions someone wrote; auto-generated ones of instrumental music are mostly noise, so they start off
+    const chosen = info.captions.find((c) => !c.auto) || info.captions[0];
+    const video = getYouTubeVideoEl();
+    if (!video || typeof document.createElement !== "function") return;
+    const el = document.createElement("track");
+    el.kind = "captions";
+    el.srclang = chosen.lang;
+    const name = chosen.name || chosen.lang;
+    el.label = chosen.auto && !/auto-generated/i.test(name) ? `${name} (auto-generated)` : name;
+    el.src = `./api/yt/captions?id=${encodeURIComponent(track.youtubeId)}&lang=${encodeURIComponent(chosen.lang)}`;
+    if (!chosen.auto) el.default = true;
+    if (typeof video.append === "function") video.append(el);
+    ytVideo.captions = [chosen];
+    setYouTubeCaptions(!chosen.auto);
+    const cc = document.getElementById("yt-video-cc-btn");
+    if (cc) {
+        cc.hidden = false;
+        cc.setAttribute("aria-label", `Captions: ${el.label}`);
+    }
+}
+
+function setYouTubeCaptions(on) {
+    const video = getYouTubeVideoEl();
+    ytVideo.captionsOn = Boolean(on);
+    const tracks = video && video.textTracks ? Array.from(video.textTracks) : [];
+    for (const t of tracks) t.mode = on ? "showing" : "hidden";
+    const cc = document.getElementById("yt-video-cc-btn");
+    if (cc) {
+        cc.setAttribute("aria-pressed", String(Boolean(on)));
+        cc.classList.toggle("active", Boolean(on));
+    }
+}
+
+function clearYouTubeEmbed() {
+    const slot = document.getElementById("yt-embed-slot");
+    if (slot) {
+        slot.replaceChildren();
+        slot.hidden = true;
+    }
+}
+
+/**
+ * Watch-only fallback with YouTube's own player. withSound: the deck couldn't play it, so the embed plays the
+ * sound (outside crossfade, volume and the playbar). Otherwise the embed is muted next to working audio.
+ */
+function openYouTubeEmbed(track, options = {}) {
+    const YT = getYouTubeModule();
+    const panel = document.getElementById("yt-video-panel");
+    const slot = document.getElementById("yt-embed-slot");
+    if (!YT || !panel || !slot || !isYouTubeTrack(track)) return false;
+    const withSound = Boolean(options.withSound);
+    const video = getYouTubeVideoEl();
+    if (video) {
+        if (typeof video.pause === "function") video.pause();
+        video.removeAttribute("src");
+        video.hidden = true;
+    }
+    if (withSound) {
+        const pe = getPlayerEngine();
+        if (pe && typeof pe.pause === "function") pe.pause();
+        else if (currentSong && typeof currentSong.pause === "function") currentSong.pause();
+        updatePlayButtonIcon(true);
+    }
+    ytVideoWanted = true;
+    ytVideo = { open: true, mode: "embed", trackId: track.id, withSound, captions: [], captionsOn: false, token: ytVideo.token + 1 };
+    renderYouTubePanelChrome(track);
+    const start = withSound ? 0 : Math.floor(Number(currentSong && currentSong.currentTime) || 0);
+    const iframe = document.createElement("iframe");
+    iframe.src = YT.buildEmbedUrl(track.youtubeId, start, { autoplay: true, mute: !withSound });
+    iframe.title = `YouTube player: ${track.title}`;
+    iframe.allow = "autoplay; encrypted-media; picture-in-picture; fullscreen";
+    iframe.setAttribute("allowfullscreen", "");
+    iframe.setAttribute("referrerpolicy", "strict-origin-when-cross-origin");
+    iframe.className = "yt-embed";
+    slot.replaceChildren(iframe);
+    slot.hidden = false;
+    const why = options.reason ? `${options.reason} ` : "";
+    setYouTubeNote(
+        withSound
+            ? `${why}Watching in YouTube's own player: its sound doesn't go through SpotTube's crossfade or volume, and the playbar doesn't control it.`
+            : `${why}Showing YouTube's own player, muted, next to the sound in the player below. It may drift from the sound.`
+    );
+    panel.hidden = false;
+    updateYouTubeToggle(songs[currentTrackIndex]);
+    revealYouTubePanel();
+    return true;
+}
+
+function showYouTubeVideoError(track, code) {
+    const YT = getYouTubeModule();
+    if (!YT || ytVideo.trackId !== track.id) return;
+    const message = YT.describeYtError(code);
+    if (YT.canFallBackToEmbed(code) && ytVideo.mode === "video") {
+        openYouTubeEmbed(track, { withSound: false, reason: `Couldn't load the video here. ${message}` });
+    } else {
+        setYouTubeNote(message);
+    }
+}
+
+function closeYouTubeVideo(options = {}) {
+    const panel = document.getElementById("yt-video-panel");
+    const video = getYouTubeVideoEl();
+    const wasEmbedWithSound = ytVideo.mode === "embed" && ytVideo.withSound;
+    if (video) {
+        if (typeof video.pause === "function") video.pause();
+        if (typeof video.removeAttribute === "function") video.removeAttribute("src");
+        if (typeof video.querySelectorAll === "function") video.querySelectorAll("track").forEach((t) => t.remove());
+        if (typeof video.load === "function") video.load();
+    }
+    clearYouTubeEmbed();
+    if (panel) panel.hidden = true;
+    ytVideo = { open: false, mode: "video", trackId: null, withSound: false, captions: [], captionsOn: false, token: ytVideo.token + 1 };
+    if (!options.keepWanted) ytVideoWanted = false;
+    setYouTubeNote("");
+    updateYouTubeToggle();
+    if (options.returnFocus) {
+        const btn = document.getElementById("playbar-video-btn");
+        if (btn && !btn.hidden) btn.focus();
+    }
+    return wasEmbedWithSound;
+}
+
+function toggleYouTubeVideo(force) {
+    const track = songs[currentTrackIndex];
+    if (!isYouTubeTrack(track)) return false;
+    const isOn = ytVideo.open && ytVideo.trackId === track.id;
+    const turnOn = typeof force === "boolean" ? force : !isOn;
+    if (turnOn && !isOn) openYouTubeVideo(track);
+    else if (!turnOn && isOn) closeYouTubeVideo();
+    return turnOn;
+}
+
+/** The main view scrolls; bring the panel into view (under the sticky navbar and chips) without moving focus. */
+function revealYouTubePanel() {
+    const panel = document.getElementById("yt-video-panel");
+    if (!panel || typeof panel.scrollIntoView !== "function") return;
+    const reduce =
+        typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    panel.scrollIntoView({ block: "start", behavior: reduce ? "auto" : "smooth" });
+}
+
+function focusYouTubePanel() {
+    const title = document.getElementById("yt-video-title");
+    if (title && typeof title.focus === "function") title.focus();
+}
+
+/** Keeps the muted video on the playing deck's position and play state. */
+function syncYouTubeVideo() {
+    if (!ytVideo.open || ytVideo.mode !== "video") return null;
+    const YT = getYouTubeModule();
+    const video = getYouTubeVideoEl();
+    const track = songs[currentTrackIndex];
+    if (!YT || !video || !track || track.id !== ytVideo.trackId) return null;
+    if (Number(video.readyState) < 1) return null; // no metadata yet: loadedmetadata calls this again
+    const action = YT.computeVideoSync({
+        audioTime: currentSong.currentTime,
+        videoTime: video.currentTime,
+        audioPaused: currentSong.paused,
+        videoPaused: video.paused,
+    });
+    if (action.seek !== null) video.currentTime = action.seek;
+    if (action.play && typeof video.play === "function") {
+        const p = video.play();
+        if (p && typeof p.catch === "function") p.catch(() => {});
+    }
+    if (action.pause && typeof video.pause === "function") video.pause();
+    return action;
+}
+
+function requestYouTubeFullscreen() {
+    const frame = document.getElementById("yt-video-frame");
+    const video = getYouTubeVideoEl();
+    if (frame && typeof frame.requestFullscreen === "function") {
+        const p = frame.requestFullscreen();
+        if (p && typeof p.catch === "function") p.catch(() => {});
+        return true;
+    }
+    // iOS Safari: only the <video> itself can go full screen
+    if (video && typeof video.webkitEnterFullscreen === "function") {
+        video.webkitEnterFullscreen();
+        return true;
+    }
+    return false;
+}
+
+/** The YouTube track can't be played in the normal player: no server, or the stream failed. */
+async function handleYouTubePlaybackError(track) {
+    const YT = getYouTubeModule();
+    if (!YT || !isYouTubeTrack(track) || ytErrorShownFor === track.id) return null;
+    ytErrorShownFor = track.id;
+    let code = "UPSTREAM";
+    try {
+        const res = await fetch(`./api/yt/info?id=${encodeURIComponent(track.youtubeId)}`, { cache: "no-store" });
+        const type = res.headers && typeof res.headers.get === "function" ? res.headers.get("content-type") || "" : "";
+        if (!/json/.test(type)) code = "NO_SERVER";
+        else if (!res.ok) code = ((await res.json()) || {}).error?.code || "UPSTREAM";
+    } catch (_) {
+        code = "NO_SERVER";
+    }
+    if (code === "NO_SERVER") setYouTubeApiStatus("missing");
+    else ytFailedTrackIds.add(track.id);
+    syncQueueCatalog();
+    const message = `“${track.title}”: ${YT.describeYtError(code)}`;
+    showLibraryToast(message, {
+        error: true,
+        timeoutMs: 0,
+        action: YT.canFallBackToEmbed(code)
+            ? { label: "Watch in YouTube's player", onClick: () => openYouTubeEmbed(track, { withSound: true }) }
+            : null,
+    });
+    return code;
+}
+
+function initYouTubeControls() {
+    const libBtn = document.getElementById("lib-youtube");
+    if (libBtn) libBtn.addEventListener("click", () => openYouTubeDetail());
+    const form = document.getElementById("yt-add-form");
+    if (form) {
+        form.addEventListener("submit", (e) => {
+            if (e && typeof e.preventDefault === "function") e.preventDefault();
+            submitYouTubeAddForm();
+        });
+    }
+    const list = document.getElementById("yt-available-list");
+    if (list) list.addEventListener("click", handleYouTubeAvailableClick);
+    const addAll = document.getElementById("yt-add-all-btn");
+    if (addAll) {
+        addAll.addEventListener("click", () => {
+            const added = addAllYouTubeVideos();
+            setYouTubeAddStatus(added.length ? `Added ${added.length} ${added.length === 1 ? "video" : "videos"}.` : "Nothing new to add.");
+            const input = document.getElementById("yt-add-input");
+            if (input) input.focus();
+        });
+    }
+    const toggle = document.getElementById("playbar-video-btn");
+    if (toggle) toggle.addEventListener("click", () => toggleYouTubeVideo());
+    const close = document.getElementById("yt-video-close-btn");
+    if (close) {
+        close.addEventListener("click", () => {
+            const hadSound = closeYouTubeVideo({ returnFocus: true });
+            if (hadSound) showLibraryToast("Closed YouTube's player. Press play to listen in SpotTube.");
+        });
+    }
+    const cc = document.getElementById("yt-video-cc-btn");
+    if (cc) cc.addEventListener("click", () => setYouTubeCaptions(!ytVideo.captionsOn));
+    const fs = document.getElementById("yt-video-fullscreen-btn");
+    if (fs) fs.addEventListener("click", () => requestYouTubeFullscreen());
+    const video = getYouTubeVideoEl();
+    if (video) {
+        for (const type of ["loadedmetadata", "canplay"]) video.addEventListener(type, () => syncYouTubeVideo());
+        video.addEventListener("error", () => {
+            const track = songs.find((t) => t.id === ytVideo.trackId);
+            if (track && ytVideo.mode === "video" && video.getAttribute("src")) showYouTubeVideoError(track, "UPSTREAM");
+        });
+    }
+    updateYouTubeCount();
+}
+
 window.SpotTubeShell = {
+    // Item 16: YouTube public-domain videos
+    initYouTubeControls,
+    getYouTubeTracks,
+    getYouTubeAllowlist: () => ytAllowlist.slice(),
+    getYouTubeApiState: () => ({ ...ytApiState }),
+    getYouTubeVideoState: () => ({ ...ytVideo, wanted: ytVideoWanted }),
+    setYouTubeApiStatus,
+    checkYouTubeApi,
+    addYouTubeVideo,
+    addAllYouTubeVideos,
+    removeYouTubeVideo,
+    openYouTubeDetail,
+    submitYouTubeAddForm,
+    renderYouTubeLibraryPanel,
+    openYouTubeVideo,
+    openYouTubeEmbed,
+    closeYouTubeVideo,
+    toggleYouTubeVideo,
+    syncYouTubeVideo,
+    setYouTubeCaptions,
+    handleYouTubePlaybackError,
+    isYouTubeTrackUnplayable,
     // Item 15: online metadata lookup
     isOnlineLookupEnabled,
     setOnlineLookupEnabled,
