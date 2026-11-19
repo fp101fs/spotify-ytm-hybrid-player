@@ -227,16 +227,90 @@
                     <div id="home-shelves" class="home-shelves"></div>
 
                     <!-- Primary Catalog Section -->
-                    <section class="catalog-section" aria-labelledby="catalog-section-title">
+                    <section class="catalog-section" id="catalog-section" aria-labelledby="catalog-section-title">
                         <div class="section-header">
-                            <h2 id="catalog-section-title">Spotify Playlists</h2>
+                            <h2 id="catalog-section-title" tabindex="-1">Spotify Playlists</h2>
                             <span class="section-meta" id="catalog-count-badge">12 tracks</span>
                         </div>
                         <div class="spotify-playlist" id="track-grid"></div>
                     </section>
 
                     <!-- Containers for Detail View (Item 8) and Omni-Search View (Item 9) -->
-                    <section id="detail-view" class="detail-view" hidden aria-label="Artist or Album Detail"></section>
+                    <section id="detail-view" class="detail-view" hidden aria-label="Artist or Album Detail" aria-labelledby="detail-heading">
+                        <div class="detail-topbar">
+                            <button type="button" class="detail-back-btn" id="detail-back-btn" aria-label="Back to catalog">
+                                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.03.47a.75.75 0 0 1 0 1.06L4.56 8l6.47 6.47a.75.75 0 1 1-1.06 1.06L2.44 8 9.97.47a.75.75 0 0 1 1.06 0z"/></svg>
+                                <span>Back to Catalog</span>
+                            </button>
+                            <div class="detail-breadcrumbs" id="detail-breadcrumbs" aria-label="Detail View Breadcrumbs"></div>
+                        </div>
+
+                        <header class="detail-hero" id="detail-hero">
+                            <div class="detail-hero-art-wrap">
+                                <img src="Images/Espresso.jpeg" alt="Detail Cover" class="detail-hero-cover" id="detail-cover">
+                                <span class="detail-type-badge" id="detail-type-badge">ARTIST PROFILE</span>
+                            </div>
+                            <div class="detail-hero-body">
+                                <span class="hero-eyebrow" id="detail-eyebrow">SPOTIFY + YT MUSIC HYBRID</span>
+                                <h1 class="detail-hero-title" id="detail-heading" tabindex="-1">Artist Name</h1>
+                                <p class="detail-hero-subtitle" id="detail-subtitle">Top tracks, discography, and sonic matches</p>
+                                <div class="detail-meta-pills" id="detail-meta-pills" aria-label="Entity Statistics and Metadata"></div>
+                                <div class="detail-collaborators" id="detail-collaborators" aria-label="Credited Artists and Collaborators"></div>
+                                <div class="detail-hero-actions">
+                                    <button type="button" class="hero-primary-btn detail-start-mix-btn" id="detail-start-mix-btn">
+                                        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 4a3 3 0 1 1 0 6 3 3 0 0 1 0-6z"/></svg>
+                                        <span id="detail-start-mix-label">Start Artist Mix</span>
+                                    </button>
+                                    <button type="button" class="hero-secondary-btn detail-play-all-btn" id="detail-play-all-btn">
+                                        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="m7.05 3.606 13.49 7.788a.7.7 0 0 1 0 1.212L7.05 20.394A.7.7 0 0 1 6 19.788V4.212a.7.7 0 0 1 1.05-.606z"/></svg>
+                                        <span id="detail-play-all-label">Play Top Tracks</span>
+                                    </button>
+                                    <button type="button" class="hero-secondary-btn detail-shuffle-btn" id="detail-shuffle-btn">
+                                        <span>Shuffle</span>
+                                    </button>
+                                    <button type="button" class="hero-secondary-btn detail-queue-all-btn" id="detail-queue-all-btn">
+                                        <span>+ Queue All</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </header>
+
+                        <!-- Top Tracks / Album Tracklist Section -->
+                        <section class="detail-section" id="detail-top-tracks-section" aria-labelledby="detail-top-tracks-title">
+                            <div class="section-header">
+                                <h2 id="detail-top-tracks-title">Top Tracks</h2>
+                                <span class="section-meta" id="detail-top-tracks-count">0 tracks</span>
+                            </div>
+                            <div class="detail-tracklist" id="detail-top-tracks" role="list" aria-label="Detail Tracklist"></div>
+                        </section>
+
+                        <!-- Song Audio Profile & Telemetry Section -->
+                        <section class="detail-section" id="detail-audio-profile-section" aria-labelledby="detail-audio-profile-title" hidden>
+                            <div class="section-header">
+                                <h2 id="detail-audio-profile-title">Sonic DNA &amp; Taste Telemetry</h2>
+                                <span class="section-meta" id="detail-audio-profile-meta">8D Audio Vector + Live Analyzer</span>
+                            </div>
+                            <div class="detail-audio-profile" id="detail-audio-profile"></div>
+                        </section>
+
+                        <!-- Discography & Albums Section -->
+                        <section class="detail-section" id="detail-discography-section" aria-labelledby="detail-discography-title">
+                            <div class="section-header">
+                                <h2 id="detail-discography-title">Discography &amp; Albums</h2>
+                                <span class="section-meta" id="detail-discography-count">0 releases</span>
+                            </div>
+                            <div class="detail-discography-grid" id="detail-discography" role="list" aria-label="Discography Releases"></div>
+                        </section>
+
+                        <!-- Similar in Your Library Recommendations Section -->
+                        <section class="detail-section" id="detail-similar-section" aria-labelledby="detail-similar-title">
+                            <div class="section-header">
+                                <h2 id="detail-similar-title">Similar in Your Library</h2>
+                                <span class="section-meta" id="detail-similar-subtitle">Hybrid multi-signal recommendations</span>
+                            </div>
+                            <div class="detail-similar-grid" id="detail-similar-tracks" role="list" aria-label="Similar Tracks in Your Library"></div>
+                        </section>
+                    </section>
                     <section id="search-view" class="search-view" hidden aria-label="Search Results"></section>
                 </div>
 

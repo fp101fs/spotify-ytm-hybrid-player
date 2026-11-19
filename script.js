@@ -16,6 +16,8 @@ let isRepeat = false;
 let crossfadeSeconds = 0;
 let isShortcutsModalOpen = false;
 let playerEngineInstance = null;
+let activeView = "home";
+let activeDetail = null;
 
 function getStorage() {
     if (typeof window !== "undefined" && window.SpotTubeStorage) {
@@ -138,7 +140,7 @@ function hydrateFromStorage() {
 }
 
 // Simple Navigation History Stack for Top Navbar Back/Forward Buttons
-const navHistory = [{ mood: "All", query: "", title: "Spotify Playlists" }];
+const navHistory = [{ view: "home", detail: null, mood: "All", query: "", title: "Spotify Playlists" }];
 let navHistoryIndex = 0;
 let isRestoringHistory = false;
 
@@ -299,6 +301,13 @@ function syncActiveTrackUI() {
     renderDrawerQueue();
     renderDrawerTrackInfo(track);
     syncCrossfadeUI();
+
+    // 5. Highlight active track rows/cards if Detail View is currently open
+    if (activeView === "detail" && activeDetail) {
+        document.querySelectorAll("#detail-view [data-track-id]").forEach((row) => {
+            row.classList.toggle("active-track", row.dataset.trackId === track.id);
+        });
+    }
 }
 
 function updatePlaybarTrackMeta(track) {
@@ -649,15 +658,17 @@ function renderCatalogGrid() {
         }
         card.dataset.trackId = track.id;
         card.dataset.trackIndex = String(fullIdx);
+        card.dataset.artist = track.primaryArtist;
+        card.dataset.album = track.album;
         card.innerHTML = `<div class="card-media"><img alt="${track.title}"></div>
                         <div class="play"><button type="button" class="card-play-btn" aria-label="Play ${track.title}"><svg data-encore-id="icon" role="img" aria-hidden="true" viewBox="0 0 24 24" class="Svg-sc-ytk21e-0 bneLcE"><path d="m7.05 3.606 13.49 7.788a.7.7 0 0 1 0 1.212L7.05 20.394A.7.7 0 0 1 6 19.788V4.212a.7.7 0 0 1 1.05-.606z"></path></svg></button>
                         </div>
                         <div class="info">
-                            <h4></h4>
-                            <p></p>
+                            <h4 title="View Song Details: ${track.title}"></h4>
+                            <p title="View Artist Profile: ${track.primaryArtist}"></p>
                         </div>
                         <div class="card-badges">
-                            <span class="card-badge-pill">${track.genre || "Pop"}</span>
+                            <span class="card-badge-pill" data-open-album="${track.album}" title="View Album: ${track.album}">${track.genre || "Pop"}</span>
                             <span>${track.durationFormatted || "0:00"}</span>
                         </div>
                         <div class="card-quick-actions" role="group" aria-label="Queue and Radio Mix actions for ${track.title}">
@@ -672,8 +683,30 @@ function renderCatalogGrid() {
                             </button>
                         </div>`;
         card.querySelector("img").src = track.coverUrl;
-        card.querySelector("h4").textContent = track.title;
-        card.querySelector("p").textContent = track.artistDisplay;
+        const h4El = card.querySelector("h4");
+        const pEl = card.querySelector("p");
+        const badgeEl = card.querySelector(".card-badge-pill");
+        h4El.textContent = track.title;
+        pEl.textContent = track.artistDisplay;
+
+        if (h4El && typeof h4El.addEventListener === "function") {
+            h4El.addEventListener("click", (e) => {
+                e.stopPropagation();
+                openSongDetail(track.id);
+            });
+        }
+        if (pEl && typeof pEl.addEventListener === "function") {
+            pEl.addEventListener("click", (e) => {
+                e.stopPropagation();
+                openArtistDetail(track.primaryArtist);
+            });
+        }
+        if (badgeEl && typeof badgeEl.addEventListener === "function") {
+            badgeEl.addEventListener("click", (e) => {
+                e.stopPropagation();
+                openAlbumDetail(track.album);
+            });
+        }
 
         card.querySelector("button").addEventListener("click", (e) => {
             e.stopPropagation();
@@ -691,6 +724,12 @@ function renderCatalogGrid() {
                         addTrackToQueue(track.id);
                     } else if (action === "start-mix") {
                         startRadioMix({ type: "track", track });
+                    } else if (action === "song-detail" || action === "open-detail") {
+                        openSongDetail(track.id);
+                    } else if (action === "artist-detail") {
+                        openArtistDetail(track.primaryArtist);
+                    } else if (action === "album-detail") {
+                        openAlbumDetail(track.album);
                     }
                 });
             });
@@ -715,8 +754,11 @@ function renderLibrarySidebar() {
     if (activeLibraryFilter === "artists") {
         const seenArtists = new Map();
         for (const track of songs) {
-            if (!seenArtists.has(track.primaryArtist)) {
-                seenArtists.set(track.primaryArtist, track);
+            const trackArtists = getTrackArtistList(track);
+            for (const artistName of trackArtists) {
+                if (artistName && !seenArtists.has(artistName)) {
+                    seenArtists.set(artistName, track);
+                }
             }
         }
         for (const [artistName, sampleTrack] of seenArtists.entries()) {
@@ -728,27 +770,57 @@ function renderLibrarySidebar() {
                 <div class="lib-item-art"><img src="${sampleTrack.coverUrl}" alt="${artistName}"></div>
                 <div class="lib-item-meta">
                     <span class="lib-item-title">${artistName}</span>
-                    <span class="lib-item-sub">Artist Radio &bull; ${sampleTrack.genre || "Music"}</span>
+                    <span class="lib-item-sub">Artist Profile &bull; ${sampleTrack.genre || "Music"}</span>
+                </div>
+                <div class="lib-item-actions">
+                    <span class="lib-mini-btn" data-lib-action="start-mix" title="Start ${artistName} Radio Mix" aria-label="Start ${artistName} Radio Mix">
+                        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 4a3 3 0 1 1 0 6 3 3 0 0 1 0-6z"/></svg>
+                    </span>
                 </div>`;
+            const mixMiniBtn = btn.querySelector('[data-lib-action="start-mix"]');
+            if (mixMiniBtn && typeof mixMiniBtn.addEventListener === "function") {
+                mixMiniBtn.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    startRadioMix({ type: "artist", artist: artistName });
+                });
+            }
             btn.addEventListener("click", () => {
-                startRadioMix({ type: "artist", artist: artistName });
+                openArtistDetail(artistName);
             });
             nodes.push(btn);
         }
     } else if (activeLibraryFilter === "albums") {
+        const seenAlbums = new Map();
         for (const track of songs) {
+            if (track.album && !seenAlbums.has(track.album)) {
+                seenAlbums.set(track.album, track);
+            }
+        }
+        for (const [albumName, track] of seenAlbums.entries()) {
             const btn = document.createElement("button");
             btn.type = "button";
             btn.className = "library-item";
-            btn.dataset.album = track.album;
+            btn.dataset.album = albumName;
             btn.innerHTML = `
-                <div class="lib-item-art"><img src="${track.coverUrl}" alt="${track.album}"></div>
+                <div class="lib-item-art"><img src="${track.coverUrl}" alt="${albumName}"></div>
                 <div class="lib-item-meta">
-                    <span class="lib-item-title">${track.album}</span>
-                    <span class="lib-item-sub">Album Radio &bull; ${track.primaryArtist} (${track.year || 2024})</span>
+                    <span class="lib-item-title">${albumName}</span>
+                    <span class="lib-item-sub">Album &bull; ${track.primaryArtist} (${track.year || 2024})</span>
+                </div>
+                <div class="lib-item-actions">
+                    <span class="lib-mini-btn" data-lib-action="start-mix" title="Start ${albumName} Radio Mix" aria-label="Start ${albumName} Radio Mix">
+                        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 4a3 3 0 1 1 0 6 3 3 0 0 1 0-6z"/></svg>
+                    </span>
                 </div>`;
+            const mixMiniBtn = btn.querySelector('[data-lib-action="start-mix"]');
+            if (mixMiniBtn && typeof mixMiniBtn.addEventListener === "function") {
+                mixMiniBtn.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    startRadioMix({ type: "album", album: albumName });
+                });
+            }
             btn.addEventListener("click", () => {
-                startRadioMix({ type: "album", album: track.album });
+                openAlbumDetail(albumName);
             });
             nodes.push(btn);
         }
@@ -786,7 +858,29 @@ function renderLibrarySidebar() {
                 <div class="lib-item-meta">
                     <span class="lib-item-title">${track.title}</span>
                     <span class="lib-item-sub">${track.artistDisplay} &bull; ${track.durationFormatted || "0:00"}</span>
+                </div>
+                <div class="lib-item-actions">
+                    <span class="lib-mini-btn" data-lib-action="open-detail" title="View Song Details: ${track.title}" aria-label="View Song Details for ${track.title}">
+                        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8zm7.25-2.25a.75.75 0 1 1 1.5 0 .75.75 0 0 1-1.5 0zM7.25 7.5a.75.75 0 0 1 1.5 0v3.75a.75.75 0 0 1-1.5 0V7.5z"/></svg>
+                    </span>
+                    <span class="lib-mini-btn" data-lib-action="start-mix" title="Start ${track.title} Radio Mix" aria-label="Start ${track.title} Radio Mix">
+                        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 4a3 3 0 1 1 0 6 3 3 0 0 1 0-6z"/></svg>
+                    </span>
                 </div>`;
+            const detailMiniBtn = btn.querySelector('[data-lib-action="open-detail"]');
+            if (detailMiniBtn && typeof detailMiniBtn.addEventListener === "function") {
+                detailMiniBtn.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    openSongDetail(track.id);
+                });
+            }
+            const mixMiniBtn = btn.querySelector('[data-lib-action="start-mix"]');
+            if (mixMiniBtn && typeof mixMiniBtn.addEventListener === "function") {
+                mixMiniBtn.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    startRadioMix({ type: "track", track });
+                });
+            }
             btn.addEventListener("click", () => {
                 playMusic(track.id, false);
             });
@@ -1377,15 +1471,1477 @@ function renderDrawerTrackInfo(track) {
 function pushNavState() {
     if (isRestoringHistory) return;
     const current = navHistory[navHistoryIndex];
-    if (current && current.mood === activeMoodFilter && current.query === activeSearchQuery) {
+    const currentDetailType = current?.detail?.type || null;
+    const currentDetailTarget = current?.detail?.target || null;
+    const nextDetailType = activeDetail?.type || null;
+    const nextDetailTarget = activeDetail?.target || null;
+
+    if (
+        current &&
+        (current.view || "home") === activeView &&
+        currentDetailType === nextDetailType &&
+        currentDetailTarget === nextDetailTarget &&
+        current.mood === activeMoodFilter &&
+        current.query === activeSearchQuery
+    ) {
         return;
     }
     navHistory.splice(navHistoryIndex + 1);
     navHistory.push({
+        view: activeView,
+        detail: activeDetail
+            ? {
+                  type: activeDetail.type,
+                  target: activeDetail.target,
+                  title: activeDetail.title,
+              }
+            : null,
         mood: activeMoodFilter,
         query: activeSearchQuery,
     });
     navHistoryIndex = navHistory.length - 1;
+}
+
+function restoreNavSnapshot(snap) {
+    if (!snap) return null;
+    isRestoringHistory = true;
+    const searchInput = document.getElementById("search-input");
+    const searchClearBtn = document.getElementById("search-clear-btn");
+    activeSearchQuery = snap.query || "";
+    if (searchInput) searchInput.value = activeSearchQuery;
+    if (searchClearBtn) searchClearBtn.hidden = !activeSearchQuery;
+
+    activeMoodFilter = snap.mood || "All";
+    document.querySelectorAll("#mood-chips-bar .mood-chip").forEach((chip) => {
+        chip.classList.toggle("active", chip.dataset.mood === activeMoodFilter);
+    });
+    const qm = getQueueManager();
+    if (qm && typeof qm.setMoodFilter === "function") {
+        qm.setMoodFilter(activeMoodFilter, { retune: true, silent: true });
+    }
+
+    if (snap.view === "detail" && snap.detail) {
+        openDetailView(snap.detail, { skipHistory: true });
+    } else {
+        closeDetailView({ skipHistory: true });
+        renderCatalogGrid();
+    }
+    renderDrawerQueue();
+    isRestoringHistory = false;
+    return snap;
+}
+
+function navigateBack() {
+    if (navHistoryIndex > 0) {
+        navHistoryIndex--;
+        return restoreNavSnapshot(navHistory[navHistoryIndex]);
+    }
+    if (activeView === "detail") {
+        closeDetailView();
+        return navHistory[navHistoryIndex];
+    }
+    return null;
+}
+
+function navigateForward() {
+    if (navHistoryIndex < navHistory.length - 1) {
+        navHistoryIndex++;
+        return restoreNavSnapshot(navHistory[navHistoryIndex]);
+    }
+    return null;
+}
+
+// ==================== ARTIST, ALBUM & SONG DETAIL VIEWS (ITEM 8) ====================
+
+function getTrackArtistList(track) {
+    if (!track) return [];
+    const list = [];
+    const add = (name) => {
+        const clean = String(name || "").trim();
+        if (clean && !list.some((a) => a.toLowerCase() === clean.toLowerCase())) {
+            list.push(clean);
+        }
+    };
+    if (track.primaryArtist) add(track.primaryArtist);
+    if (Array.isArray(track.featuredArtists)) {
+        track.featuredArtists.forEach(add);
+    }
+    if (Array.isArray(track.artists)) {
+        track.artists.forEach(add);
+    }
+    if (list.length === 0 && track.artistDisplay) {
+        String(track.artistDisplay)
+            .split(",")
+            .forEach(add);
+    }
+    return list;
+}
+
+function formatTotalDuration(totalSeconds) {
+    const secs = Math.max(0, Math.round(Number(totalSeconds) || 0));
+    const mins = Math.floor(secs / 60);
+    const rem = secs % 60;
+    if (mins === 0) return `${rem} sec`;
+    if (mins >= 60) {
+        const hrs = Math.floor(mins / 60);
+        const remMins = mins % 60;
+        return `${hrs} hr ${remMins} min`;
+    }
+    return rem > 0 ? `${mins} min ${rem} sec` : `${mins} min`;
+}
+
+function runMainViewTransition(updateFn, focusTargetId) {
+    const focusTarget = () => {
+        if (!focusTargetId) return;
+        const el = document.getElementById(focusTargetId);
+        if (el && typeof el.focus === "function") {
+            try {
+                el.focus();
+            } catch (_) {}
+        }
+    };
+
+    if (
+        typeof document !== "undefined" &&
+        typeof document.startViewTransition === "function"
+    ) {
+        const transition = document.startViewTransition(() => {
+            updateFn();
+        });
+        focusTarget();
+        if (transition && transition.finished && typeof transition.finished.finally === "function") {
+            transition.finished.finally(() => {
+                focusTarget();
+            });
+        }
+        return;
+    }
+
+    updateFn();
+    focusTarget();
+}
+
+function setHomeSectionsHidden(isHidden) {
+    for (const id of ["hero-mix-banner", "home-shelves", "catalog-section"]) {
+        const el = document.getElementById(id);
+        if (el) {
+            el.hidden = Boolean(isHidden);
+            if (isHidden) {
+                el.setAttribute("aria-hidden", "true");
+            } else if (typeof el.removeAttribute === "function") {
+                el.removeAttribute("aria-hidden");
+            } else {
+                el.setAttribute("aria-hidden", "false");
+            }
+        }
+    }
+    const catalogFallback = document.querySelector(".catalog-section");
+    if (catalogFallback) {
+        catalogFallback.hidden = Boolean(isHidden);
+    }
+}
+
+function computeFallbackSimilarTracks(seedTracks, excludeIds, limit = 6) {
+    const seedList = Array.isArray(seedTracks) && seedTracks.length ? seedTracks : [songs[0]].filter(Boolean);
+    const seedGenres = new Set(seedList.map((t) => String(t?.genre || "").toLowerCase()).filter(Boolean));
+    const seedMoods = new Set(
+        seedList.flatMap((t) => (Array.isArray(t?.moods) ? t.moods : [])).map((m) => String(m).toLowerCase())
+    );
+    const avgEnergy =
+        seedList.reduce((s, t) => s + Number(t?.energy ?? 0.65), 0) / Math.max(1, seedList.length);
+    const avgBpm =
+        seedList.reduce((s, t) => s + Number(t?.bpm ?? 110), 0) / Math.max(1, seedList.length);
+
+    return songs
+        .filter((t) => t && !excludeIds.has(t.id))
+        .map((t) => {
+            const sameGenre = seedGenres.has(String(t.genre || "").toLowerCase());
+            const moodHits = (Array.isArray(t.moods) ? t.moods : []).filter((m) =>
+                seedMoods.has(String(m).toLowerCase())
+            ).length;
+            const energyProx = 1 - Math.min(1, Math.abs(Number(t.energy ?? 0.65) - avgEnergy));
+            const bpmProx = 1 - Math.min(1, Math.abs(Number(t.bpm ?? 110) - avgBpm) / 80);
+            const score = Math.min(
+                0.98,
+                Math.max(0.45, (sameGenre ? 0.35 : 0.1) + moodHits * 0.1 + energyProx * 0.3 + bpmProx * 0.25)
+            );
+            const primaryReason = sameGenre
+                ? `${t.genre} vibe`
+                : moodHits > 0
+                  ? "Shared mood & sonic profile"
+                  : `Sonic match (${Math.round(score * 100)}%)`;
+            return {
+                ...t,
+                recommendation: {
+                    totalScore: Number(score.toFixed(3)),
+                    primaryReason,
+                    reasons: [primaryReason],
+                },
+            };
+        })
+        .sort((a, b) => (b.recommendation?.totalScore || 0) - (a.recommendation?.totalScore || 0))
+        .slice(0, limit);
+}
+
+function buildAlbumSummaryObject(albumName, albumTracks, relationLabel = "Album / Single", isCurrentAlbum = false) {
+    const first = albumTracks[0] || {};
+    const artists = [];
+    for (const t of albumTracks) {
+        for (const a of getTrackArtistList(t)) {
+            if (!artists.some((x) => x.toLowerCase() === a.toLowerCase())) {
+                artists.push(a);
+            }
+        }
+    }
+    const totalDuration = albumTracks.reduce((sum, t) => sum + Number(t.duration || 0), 0);
+    return {
+        album: albumName,
+        year: first.year || 2024,
+        coverUrl: first.coverUrl || "Images/Espresso.jpeg",
+        primaryArtist: first.primaryArtist || artists[0] || "Unknown Artist",
+        artists,
+        artistDisplay: artists.join(", "),
+        genre: first.genre || "Music",
+        trackCount: albumTracks.length,
+        tracks: albumTracks,
+        totalDuration,
+        totalDurationFormatted: formatTotalDuration(totalDuration),
+        relationLabel,
+        isCurrentAlbum,
+    };
+}
+
+function buildArtistDetailData(artistNameInput, options = {}) {
+    if (!songs.length) return null;
+    const rawTarget = String(artistNameInput || "").trim();
+    const targetLower = rawTarget.toLowerCase();
+
+    // Match tracks where artist appears as primary or featured artist
+    let matchedTracks = songs.filter((t) =>
+        getTrackArtistList(t).some((a) => a.toLowerCase() === targetLower)
+    );
+    if (matchedTracks.length === 0 && targetLower) {
+        matchedTracks = songs.filter(
+            (t) =>
+                getTrackArtistList(t).some((a) => a.toLowerCase().includes(targetLower)) ||
+                String(t.artistDisplay || "")
+                    .toLowerCase()
+                    .includes(targetLower)
+        );
+    }
+    if (matchedTracks.length === 0) {
+        const fallbackArtist = (songs[currentTrackIndex] || songs[0]).primaryArtist;
+        matchedTracks = songs.filter((t) =>
+            getTrackArtistList(t).some((a) => a.toLowerCase() === String(fallbackArtist).toLowerCase())
+        );
+    }
+
+    // Resolve canonical artist name with original casing
+    let canonicalArtist = rawTarget || (matchedTracks[0]?.primaryArtist ?? "Artist");
+    for (const t of matchedTracks) {
+        const exact = getTrackArtistList(t).find((a) => a.toLowerCase() === targetLower);
+        if (exact) {
+            canonicalArtist = exact;
+            break;
+        }
+    }
+    if (!rawTarget && matchedTracks[0]) {
+        canonicalArtist = matchedTracks[0].primaryArtist;
+    }
+
+    const store = getStorage();
+    const recommender = getRecommender();
+
+    // Rank Top Tracks by primary credit + user taste affinity + likes + playCount + popularity
+    const topTracks = matchedTracks
+        .slice()
+        .sort((a, b) => {
+            const aPrimary = String(a.primaryArtist || "").toLowerCase() === canonicalArtist.toLowerCase() ? 1 : 0;
+            const bPrimary = String(b.primaryArtist || "").toLowerCase() === canonicalArtist.toLowerCase() ? 1 : 0;
+            const aAffinity =
+                store && typeof store.computeTasteAffinity === "function"
+                    ? store.computeTasteAffinity(a.id).normalizedScore
+                    : 0.5;
+            const bAffinity =
+                store && typeof store.computeTasteAffinity === "function"
+                    ? store.computeTasteAffinity(b.id).normalizedScore
+                    : 0.5;
+            const aScore = aPrimary * 0.15 + aAffinity * 0.5 + Number(a.popularity ?? 0.75) * 0.35;
+            const bScore = bPrimary * 0.15 + bAffinity * 0.5 + Number(b.popularity ?? 0.75) * 0.35;
+            return bScore - aScore;
+        });
+
+    // Build Collaborators (co-credited artists + 1-hop collaborator graph)
+    const collaborators = [];
+    const addCollab = (name) => {
+        const clean = String(name || "").trim();
+        if (
+            clean &&
+            clean.toLowerCase() !== canonicalArtist.toLowerCase() &&
+            !collaborators.some((c) => c.toLowerCase() === clean.toLowerCase())
+        ) {
+            collaborators.push(clean);
+        }
+    };
+    for (const t of matchedTracks) {
+        getTrackArtistList(t).forEach(addCollab);
+    }
+    if (recommender && typeof recommender.buildCollaboratorGraph === "function") {
+        const graph = recommender.buildCollaboratorGraph(songs);
+        const neighbors = graph.get(canonicalArtist.toLowerCase());
+        if (neighbors) {
+            for (const neighborLower of neighbors) {
+                for (const t of songs) {
+                    const matchName = getTrackArtistList(t).find((a) => a.toLowerCase() === neighborLower);
+                    if (matchName) addCollab(matchName);
+                }
+            }
+        }
+    }
+
+    // Build Discography: Artist's own albums/singles + collaborator releases + related genre releases
+    const albumGroups = new Map();
+    for (const t of songs) {
+        const alb = t.album || `${t.title} (Single)`;
+        if (!albumGroups.has(alb)) albumGroups.set(alb, []);
+        albumGroups.get(alb).push(t);
+    }
+
+    const discography = [];
+    const seenAlbums = new Set();
+
+    // 1. Direct artist releases (primary or featured)
+    for (const t of topTracks) {
+        const alb = t.album || `${t.title} (Single)`;
+        if (!seenAlbums.has(alb)) {
+            seenAlbums.add(alb);
+            const albTracks = albumGroups.get(alb) || [t];
+            const isPrimary =
+                String(albTracks[0]?.primaryArtist || "").toLowerCase() === canonicalArtist.toLowerCase();
+            discography.push(
+                buildAlbumSummaryObject(
+                    alb,
+                    albTracks,
+                    isPrimary ? "Artist Release" : `Featured with ${albTracks[0]?.primaryArtist || "Artist"}`,
+                    false
+                )
+            );
+        }
+    }
+
+    // 2. Collaborator releases
+    for (const collab of collaborators) {
+        for (const t of songs) {
+            const alb = t.album || `${t.title} (Single)`;
+            if (
+                !seenAlbums.has(alb) &&
+                getTrackArtistList(t).some((a) => a.toLowerCase() === collab.toLowerCase())
+            ) {
+                seenAlbums.add(alb);
+                discography.push(
+                    buildAlbumSummaryObject(
+                        alb,
+                        albumGroups.get(alb) || [t],
+                        `Collaborator • ${collab}`,
+                        false
+                    )
+                );
+            }
+        }
+    }
+
+    // 3. Same-genre catalog releases if fewer than 4 items
+    const artistGenres = Array.from(new Set(topTracks.map((t) => t.genre).filter(Boolean)));
+    if (discography.length < 4) {
+        for (const t of songs) {
+            const alb = t.album || `${t.title} (Single)`;
+            if (!seenAlbums.has(alb) && artistGenres.includes(t.genre)) {
+                seenAlbums.add(alb);
+                discography.push(
+                    buildAlbumSummaryObject(
+                        alb,
+                        albumGroups.get(alb) || [t],
+                        `Related in ${t.genre}`,
+                        false
+                    )
+                );
+                if (discography.length >= 4) break;
+            }
+        }
+    }
+
+    // Build Similar in Your Library recommendations
+    const artistTrackIds = new Set(topTracks.map((t) => t.id));
+    const similarLimit = options.similarLimit || 6;
+    let similarTracks = [];
+    if (recommender && typeof recommender.recommendTracks === "function") {
+        similarTracks = recommender.recommendTracks(songs, {
+            seed: { artist: canonicalArtist },
+            excludeTrackIds: Array.from(artistTrackIds),
+            includeSeedTracks: false,
+            limit: similarLimit,
+            storage: store,
+            mixMode: activeMixMode,
+        });
+    } else {
+        similarTracks = computeFallbackSimilarTracks(topTracks, artistTrackIds, similarLimit);
+    }
+
+    const totalDuration = topTracks.reduce((sum, t) => sum + Number(t.duration || 0), 0);
+    const avgBpm = Math.round(
+        topTracks.reduce((sum, t) => sum + Number(t.bpm || 110), 0) / Math.max(1, topTracks.length)
+    );
+    const avgEnergyPct = Math.round(
+        (topTracks.reduce((sum, t) => sum + Number(t.energy ?? 0.65), 0) / Math.max(1, topTracks.length)) * 100
+    );
+    const moods = Array.from(
+        new Set(topTracks.flatMap((t) => (Array.isArray(t.moods) ? t.moods : [])))
+    );
+
+    let totalPlays = 0;
+    let likedCount = 0;
+    for (const t of topTracks) {
+        if (likedTrackIds.has(t.id)) likedCount++;
+        if (store && typeof store.getTrackStats === "function") {
+            const st = store.getTrackStats(t.id);
+            totalPlays += st?.playCount || 0;
+        }
+    }
+
+    const leadTrack = topTracks[0] || songs[0];
+    const directAlbumCount = new Set(topTracks.map((t) => t.album).filter(Boolean)).size;
+
+    return {
+        type: "artist",
+        id: canonicalArtist,
+        target: canonicalArtist,
+        artist: canonicalArtist,
+        title: canonicalArtist,
+        badge: "ARTIST",
+        eyebrow: `ARTIST PROFILE • ${artistGenres.join(" / ") || "HYBRID CATALOG"}`,
+        coverUrl: leadTrack?.coverUrl || "Images/Espresso.jpeg",
+        subtitle: `${topTracks.length} ${topTracks.length === 1 ? "song" : "songs"} in your library • ${directAlbumCount} ${directAlbumCount === 1 ? "release" : "releases"}${collaborators.length ? ` • Collaborates with ${collaborators.join(", ")}` : ""}`,
+        genres: artistGenres,
+        moods,
+        collaborators,
+        trackCount: topTracks.length,
+        albumCount: directAlbumCount,
+        totalDuration,
+        totalDurationFormatted: formatTotalDuration(totalDuration),
+        avgBpm,
+        avgEnergyPct,
+        likedCount,
+        totalPlays,
+        topTracks,
+        discography,
+        similarTracks,
+        seedSpec: { type: "artist", artist: canonicalArtist },
+    };
+}
+
+function buildAlbumDetailData(albumNameInput, options = {}) {
+    if (!songs.length) return null;
+    const rawTarget = String(albumNameInput || "").trim();
+    const targetLower = rawTarget.toLowerCase();
+
+    let albumTracks = songs.filter(
+        (t) => String(t.album || "").toLowerCase() === targetLower
+    );
+    if (albumTracks.length === 0 && targetLower) {
+        albumTracks = songs.filter((t) =>
+            String(t.album || "")
+                .toLowerCase()
+                .includes(targetLower)
+        );
+    }
+    if (albumTracks.length === 0) {
+        const fallbackAlbum = (songs[currentTrackIndex] || songs[0]).album;
+        albumTracks = songs.filter(
+            (t) => String(t.album || "").toLowerCase() === String(fallbackAlbum || "").toLowerCase()
+        );
+    }
+
+    albumTracks = albumTracks
+        .slice()
+        .sort((a, b) => (a.trackNumber || 0) - (b.trackNumber || 0));
+
+    const first = albumTracks[0] || songs[0];
+    const canonicalAlbum = first.album || rawTarget || "Album";
+    const year = first.year || 2024;
+    const genre = first.genre || "Music";
+    const language = first.language || "English";
+
+    const artists = [];
+    for (const t of albumTracks) {
+        for (const a of getTrackArtistList(t)) {
+            if (!artists.some((x) => x.toLowerCase() === a.toLowerCase())) {
+                artists.push(a);
+            }
+        }
+    }
+
+    const store = getStorage();
+    const recommender = getRecommender();
+
+    // Group all albums in catalog for discography shelf
+    const albumGroups = new Map();
+    for (const t of songs) {
+        const alb = t.album || `${t.title} (Single)`;
+        if (!albumGroups.has(alb)) albumGroups.set(alb, []);
+        albumGroups.get(alb).push(t);
+    }
+
+    const discography = [];
+    const seenAlbums = new Set([canonicalAlbum]);
+    discography.push(
+        buildAlbumSummaryObject(canonicalAlbum, albumTracks, `Current Album • ${year}`, true)
+    );
+
+    // More by the album's credited artists
+    for (const artist of artists) {
+        for (const t of songs) {
+            const alb = t.album || `${t.title} (Single)`;
+            if (
+                !seenAlbums.has(alb) &&
+                getTrackArtistList(t).some((a) => a.toLowerCase() === artist.toLowerCase())
+            ) {
+                seenAlbums.add(alb);
+                discography.push(
+                    buildAlbumSummaryObject(
+                        alb,
+                        albumGroups.get(alb) || [t],
+                        `More by ${artist}`,
+                        false
+                    )
+                );
+            }
+        }
+    }
+
+    // Other albums in the same genre or language
+    for (const t of songs) {
+        const alb = t.album || `${t.title} (Single)`;
+        if (!seenAlbums.has(alb) && (t.genre === genre || t.language === language)) {
+            seenAlbums.add(alb);
+            discography.push(
+                buildAlbumSummaryObject(
+                    alb,
+                    albumGroups.get(alb) || [t],
+                    `Related • ${t.genre || genre}`,
+                    false
+                )
+            );
+            if (discography.length >= 6) break;
+        }
+    }
+
+    // Build Similar in Your Library recommendations
+    const albumTrackIds = new Set(albumTracks.map((t) => t.id));
+    const similarLimit = options.similarLimit || 6;
+    let similarTracks = [];
+    if (recommender && typeof recommender.recommendTracks === "function") {
+        similarTracks = recommender.recommendTracks(songs, {
+            seed: { album: canonicalAlbum },
+            excludeTrackIds: Array.from(albumTrackIds),
+            includeSeedTracks: false,
+            limit: similarLimit,
+            storage: store,
+            mixMode: activeMixMode,
+        });
+    } else {
+        similarTracks = computeFallbackSimilarTracks(albumTracks, albumTrackIds, similarLimit);
+    }
+
+    const totalDuration = albumTracks.reduce((sum, t) => sum + Number(t.duration || 0), 0);
+    const avgBpm = Math.round(
+        albumTracks.reduce((sum, t) => sum + Number(t.bpm || 110), 0) / Math.max(1, albumTracks.length)
+    );
+    const avgEnergyPct = Math.round(
+        (albumTracks.reduce((sum, t) => sum + Number(t.energy ?? 0.65), 0) / Math.max(1, albumTracks.length)) * 100
+    );
+    const moods = Array.from(
+        new Set(albumTracks.flatMap((t) => (Array.isArray(t.moods) ? t.moods : [])))
+    );
+    const subgenres = Array.from(
+        new Set(albumTracks.flatMap((t) => (Array.isArray(t.subgenres) ? t.subgenres : [])))
+    );
+
+    let totalPlays = 0;
+    let likedCount = 0;
+    for (const t of albumTracks) {
+        if (likedTrackIds.has(t.id)) likedCount++;
+        if (store && typeof store.getTrackStats === "function") {
+            const st = store.getTrackStats(t.id);
+            totalPlays += st?.playCount || 0;
+        }
+    }
+
+    return {
+        type: "album",
+        id: canonicalAlbum,
+        target: canonicalAlbum,
+        album: canonicalAlbum,
+        title: canonicalAlbum,
+        primaryArtist: first.primaryArtist,
+        artists,
+        collaborators: artists,
+        year,
+        genre,
+        subgenres,
+        language,
+        moods,
+        badge: "ALBUM",
+        eyebrow: `ALBUM • ${year} • ${genre.toUpperCase()}`,
+        coverUrl: first.coverUrl || "Images/Espresso.jpeg",
+        subtitle: `By ${artists.join(", ")} • ${albumTracks.length} ${albumTracks.length === 1 ? "track" : "tracks"} (${formatTotalDuration(totalDuration)})`,
+        trackCount: albumTracks.length,
+        totalDuration,
+        totalDurationFormatted: formatTotalDuration(totalDuration),
+        avgBpm,
+        avgEnergyPct,
+        likedCount,
+        totalPlays,
+        topTracks: albumTracks,
+        tracks: albumTracks,
+        discography,
+        similarTracks,
+        seedSpec: { type: "album", album: canonicalAlbum },
+    };
+}
+
+function buildSongDetailData(trackOrId, options = {}) {
+    if (!songs.length) return null;
+    const idx = resolveTrackIndex(trackOrId);
+    const track = songs[idx] || songs[0];
+    if (!track) return null;
+
+    const store = getStorage();
+    const recommender = getRecommender();
+    const artists = getTrackArtistList(track);
+
+    const effective =
+        store && typeof store.getEffectiveAudioFeatures === "function"
+            ? store.getEffectiveAudioFeatures(track)
+            : null;
+    const stats =
+        store && typeof store.getTrackStats === "function"
+            ? store.getTrackStats(track.id)
+            : null;
+    const affinity =
+        store && typeof store.computeTasteAffinity === "function"
+            ? store.computeTasteAffinity(track.id)
+            : null;
+
+    const audioProfile = {
+        bpm: track.bpm || 110,
+        bitrateKbps: track.bitrateKbps || 320,
+        sampleRate: track.sampleRate || 44100,
+        hasLiveAnalyzer: Boolean(effective?.hasLiveAnalyzer),
+        playCount: stats?.playCount || 0,
+        fullCompletions: stats?.fullCompletions || 0,
+        avgCompletionPct: Math.round((stats?.avgCompletionRatio || 0) * 100),
+        liked: likedTrackIds.has(track.id) || Boolean(stats?.liked),
+        metrics: [
+            { label: "Energy", value: Math.round(((effective?.energy ?? track.energy) ?? 0.7) * 100) },
+            { label: "Valence (Mood)", value: Math.round((track.valence ?? 0.65) * 100) },
+            { label: "Danceability", value: Math.round((track.danceability ?? 0.7) * 100) },
+            { label: "Acousticness", value: Math.round((track.acousticness ?? 0.25) * 100) },
+            {
+                label: "Spectral Brightness",
+                value: Math.round(((effective?.spectralCentroidNormalized ?? track.energy) ?? 0.6) * 100),
+            },
+            {
+                label: "Taste Affinity",
+                value: Math.round(((affinity?.normalizedScore ?? track.popularity) ?? 0.75) * 100),
+            },
+            {
+                label: "Catalog Popularity",
+                value: Math.round((track.popularity ?? 0.8) * 100),
+            },
+        ],
+    };
+
+    // Top tracks: this song + other tracks by any of this song's artists
+    const topTracks = [track];
+    for (const candidate of songs) {
+        if (candidate.id === track.id) continue;
+        const candArtists = getTrackArtistList(candidate);
+        if (
+            candArtists.some((ca) =>
+                artists.some((ta) => ta.toLowerCase() === ca.toLowerCase())
+            )
+        ) {
+            topTracks.push(candidate);
+        }
+    }
+
+    // Discography: featured album + other releases by the track's artists + same genre
+    const albumGroups = new Map();
+    for (const t of songs) {
+        const alb = t.album || `${t.title} (Single)`;
+        if (!albumGroups.has(alb)) albumGroups.set(alb, []);
+        albumGroups.get(alb).push(t);
+    }
+
+    const discography = [];
+    const seenAlbums = new Set();
+    const primaryAlbum = track.album || `${track.title} (Single)`;
+    seenAlbums.add(primaryAlbum);
+    discography.push(
+        buildAlbumSummaryObject(
+            primaryAlbum,
+            albumGroups.get(primaryAlbum) || [track],
+            `Featured on Album • ${track.year || 2024}`,
+            true
+        )
+    );
+
+    for (const artist of artists) {
+        for (const t of songs) {
+            const alb = t.album || `${t.title} (Single)`;
+            if (
+                !seenAlbums.has(alb) &&
+                getTrackArtistList(t).some((a) => a.toLowerCase() === artist.toLowerCase())
+            ) {
+                seenAlbums.add(alb);
+                discography.push(
+                    buildAlbumSummaryObject(
+                        alb,
+                        albumGroups.get(alb) || [t],
+                        `More by ${artist}`,
+                        false
+                    )
+                );
+            }
+        }
+    }
+
+    for (const t of songs) {
+        const alb = t.album || `${t.title} (Single)`;
+        if (!seenAlbums.has(alb) && t.genre === track.genre) {
+            seenAlbums.add(alb);
+            discography.push(
+                buildAlbumSummaryObject(
+                    alb,
+                    albumGroups.get(alb) || [t],
+                    `Related in ${track.genre}`,
+                    false
+                )
+            );
+            if (discography.length >= 4) break;
+        }
+    }
+
+    // Similar in Your Library via SpotTubeRecommender.getSimilarTracks
+    const similarLimit = options.similarLimit || 6;
+    let similarTracks = [];
+    if (recommender && typeof recommender.getSimilarTracks === "function") {
+        similarTracks = recommender.getSimilarTracks(songs, track, {
+            limit: similarLimit,
+            storage: store,
+            mixMode: activeMixMode,
+        });
+    } else if (recommender && typeof recommender.recommendTracks === "function") {
+        similarTracks = recommender.recommendTracks(songs, {
+            seed: track,
+            includeSeedTracks: false,
+            limit: similarLimit,
+            storage: store,
+            mixMode: activeMixMode,
+        });
+    } else {
+        similarTracks = computeFallbackSimilarTracks([track], new Set([track.id]), similarLimit);
+    }
+
+    return {
+        type: "song",
+        id: track.id,
+        target: track.id,
+        track,
+        title: track.title,
+        primaryArtist: track.primaryArtist,
+        artists,
+        collaborators: artists,
+        album: primaryAlbum,
+        year: track.year || 2024,
+        genre: track.genre || "Music",
+        subgenres: track.subgenres || [],
+        language: track.language || "English",
+        moods: track.moods || [],
+        badge: "SONG",
+        eyebrow: `SONG • ${(track.genre || "MUSIC").toUpperCase()} • ${track.year || 2024}`,
+        coverUrl: track.coverUrl || "Images/Espresso.jpeg",
+        subtitle: `${artists.join(", ")} • Album: ${primaryAlbum} (${track.year || 2024}) • ${track.durationFormatted || "0:00"}`,
+        trackCount: topTracks.length,
+        totalDuration: track.duration || 0,
+        totalDurationFormatted: track.durationFormatted || "0:00",
+        avgBpm: track.bpm || 110,
+        avgEnergyPct: Math.round((track.energy ?? 0.65) * 100),
+        likedCount: audioProfile.liked ? 1 : 0,
+        totalPlays: audioProfile.playCount,
+        audioProfile,
+        topTracks,
+        discography,
+        similarTracks,
+        seedSpec: { type: "track", track },
+    };
+}
+
+function toggleLikeTrackById(trackId) {
+    if (!trackId) return false;
+    const store = getStorage();
+    let nowLiked = false;
+    if (store && typeof store.toggleLike === "function") {
+        nowLiked = store.toggleLike(trackId);
+        if (nowLiked) likedTrackIds.add(trackId);
+        else likedTrackIds.delete(trackId);
+    } else if (likedTrackIds.has(trackId)) {
+        likedTrackIds.delete(trackId);
+        nowLiked = false;
+    } else {
+        likedTrackIds.add(trackId);
+        nowLiked = true;
+    }
+    const likedCountEl = document.getElementById("lib-liked-count");
+    if (likedCountEl) {
+        likedCountEl.textContent =
+            likedTrackIds.size > 0
+                ? `Auto-playlist • ${likedTrackIds.size} liked`
+                : "Auto-playlist • Pin";
+    }
+    syncActiveTrackUI();
+    return nowLiked;
+}
+
+function createDetailTrackRowNode(track, idx) {
+    const row = document.createElement("div");
+    const activeTrack = songs[currentTrackIndex];
+    const isPlaying = activeTrack && activeTrack.id === track.id;
+    const isLiked = likedTrackIds.has(track.id);
+    const artists = getTrackArtistList(track);
+
+    row.className = isPlaying ? "detail-track-row active-track" : "detail-track-row";
+    row.setAttribute("role", "listitem");
+    row.dataset.trackId = track.id;
+    row.dataset.artist = track.primaryArtist;
+    row.dataset.album = track.album;
+
+    const artistButtonsHtml = artists
+        .map(
+            (a) =>
+                `<button type="button" class="detail-inline-link" data-open-artist="${a}" title="Open Artist: ${a}">${a}</button>`
+        )
+        .join("<span>, </span>");
+
+    row.innerHTML = `
+        <span class="detail-track-num">${idx + 1}</span>
+        <img src="${track.coverUrl}" alt="${track.title}" class="detail-track-cover">
+        <div class="detail-track-main">
+            <div class="detail-track-title-row">
+                <span class="detail-track-title" data-open-song="${track.id}" title="Open Song Detail: ${track.title}">${track.title}</span>
+            </div>
+            <div class="detail-track-artists">${artistButtonsHtml}</div>
+        </div>
+        <div class="detail-track-album-col">
+            <button type="button" class="detail-inline-link" data-open-album="${track.album}" title="Open Album: ${track.album}">${track.album}</button>
+            <span class="detail-track-telemetry">${track.genre || "Music"} &bull; ${track.bpm || 110} BPM &bull; ${Math.round((track.energy ?? 0.65) * 100)}% Energy</span>
+        </div>
+        <div class="detail-track-actions" role="group" aria-label="Actions for ${track.title}">
+            <button type="button" class="detail-row-btn ${isLiked ? "liked" : ""}" data-detail-track-action="like" aria-pressed="${isLiked}" title="Like ${track.title}">
+                <span>${isLiked ? "♥ Liked" : "♡ Like"}</span>
+            </button>
+            <button type="button" class="detail-row-btn" data-detail-track-action="play-next" title="Play ${track.title} Next">
+                <span>Play Next</span>
+            </button>
+            <button type="button" class="detail-row-btn" data-detail-track-action="add-to-queue" title="Add ${track.title} to Queue">
+                <span>+ Queue</span>
+            </button>
+            <button type="button" class="detail-row-btn mix-btn" data-detail-track-action="start-mix" title="Start Radio Mix from ${track.title}">
+                <span>Start Mix</span>
+            </button>
+            <span class="detail-track-duration">${track.durationFormatted || "0:00"}</span>
+        </div>
+    `;
+
+    const songTitleEl = row.querySelector("[data-open-song]");
+    if (songTitleEl && typeof songTitleEl.addEventListener === "function") {
+        songTitleEl.addEventListener("click", (e) => {
+            e.stopPropagation();
+            openSongDetail(track.id);
+        });
+    }
+
+    if (typeof row.querySelectorAll === "function") {
+        row.querySelectorAll("[data-open-artist]").forEach((btn) => {
+            btn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                openArtistDetail(btn.dataset.openArtist);
+            });
+        });
+
+        row.querySelectorAll("[data-open-album]").forEach((btn) => {
+            btn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                openAlbumDetail(btn.dataset.openAlbum);
+            });
+        });
+
+        row.querySelectorAll("[data-detail-track-action]").forEach((btn) => {
+            btn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const action = btn.dataset.detailTrackAction;
+                if (action === "like") {
+                    const liked = toggleLikeTrackById(track.id);
+                    btn.classList.toggle("liked", liked);
+                    btn.setAttribute("aria-pressed", String(liked));
+                    btn.innerHTML = `<span>${liked ? "♥ Liked" : "♡ Like"}</span>`;
+                } else if (action === "play-next") {
+                    playTrackNext(track.id);
+                } else if (action === "add-to-queue") {
+                    addTrackToQueue(track.id);
+                } else if (action === "start-mix") {
+                    startRadioMix({ type: "track", track });
+                } else if (action === "song-detail") {
+                    openSongDetail(track.id);
+                }
+            });
+        });
+    }
+
+    row.addEventListener("click", () => {
+        playMusic(track.id, false);
+    });
+    return row;
+}
+
+function createDetailDiscographyCardNode(albumItem) {
+    const card = document.createElement("div");
+    card.className = albumItem.isCurrentAlbum
+        ? "detail-album-card current-album-card"
+        : "detail-album-card";
+    card.setAttribute("role", "listitem");
+    card.dataset.album = albumItem.album;
+    card.dataset.artist = albumItem.primaryArtist;
+
+    card.innerHTML = `
+        <div class="detail-card-cover-wrap">
+            <img src="${albumItem.coverUrl}" alt="${albumItem.album}" class="detail-card-cover">
+        </div>
+        <span class="detail-card-relation">${albumItem.relationLabel || "Album / Single"}</span>
+        <h4 class="detail-card-title">${albumItem.album}</h4>
+        <p class="detail-card-sub">
+            <button type="button" class="detail-inline-link" data-open-artist="${albumItem.primaryArtist}">${albumItem.primaryArtist}</button>
+            &bull; ${albumItem.year} &bull; ${albumItem.trackCount} ${albumItem.trackCount === 1 ? "track" : "tracks"}
+        </p>
+        <div class="card-quick-actions" role="group" aria-label="Album actions for ${albumItem.album}">
+            <button type="button" class="card-action-btn" data-discog-action="play-album" title="Play ${albumItem.album}">
+                <span>Play</span>
+            </button>
+            <button type="button" class="card-action-btn" data-discog-action="open-album" title="Open ${albumItem.album} Detail View">
+                <span>View Album</span>
+            </button>
+            <button type="button" class="card-action-btn mix-action-btn" data-discog-action="start-mix" title="Start Album Radio Mix for ${albumItem.album}">
+                <span>Start Mix</span>
+            </button>
+        </div>
+    `;
+
+    const artistBtn = card.querySelector("[data-open-artist]");
+    if (artistBtn && typeof artistBtn.addEventListener === "function") {
+        artistBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            openArtistDetail(albumItem.primaryArtist);
+        });
+    }
+
+    if (typeof card.querySelectorAll === "function") {
+        card.querySelectorAll("[data-discog-action]").forEach((btn) => {
+            btn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const action = btn.dataset.discogAction;
+                if (action === "play-album") {
+                    const tracks = albumItem.tracks || [];
+                    if (tracks.length > 0) {
+                        playMusic(tracks[0].id, false);
+                        for (let i = 1; i < tracks.length; i++) {
+                            addTrackToQueue(tracks[i].id);
+                        }
+                    }
+                } else if (action === "open-album") {
+                    openAlbumDetail(albumItem.album);
+                } else if (action === "start-mix") {
+                    startRadioMix({ type: "album", album: albumItem.album });
+                }
+            });
+        });
+    }
+
+    card.addEventListener("click", () => {
+        openAlbumDetail(albumItem.album);
+    });
+    return card;
+}
+
+function createDetailSimilarTrackCardNode(simTrack) {
+    const card = document.createElement("div");
+    const activeTrack = songs[currentTrackIndex];
+    const isPlaying = activeTrack && activeTrack.id === simTrack.id;
+
+    card.className = isPlaying ? "detail-similar-card active-track" : "detail-similar-card";
+    card.setAttribute("role", "listitem");
+    card.dataset.trackId = simTrack.id;
+    card.dataset.artist = simTrack.primaryArtist;
+    card.dataset.album = simTrack.album;
+
+    const reason = simTrack.recommendation?.primaryReason || `${simTrack.genre || "Sonic"} match`;
+    const scorePct =
+        typeof simTrack.recommendation?.totalScore === "number"
+            ? `${Math.round(simTrack.recommendation.totalScore * 100)}%`
+            : "";
+
+    card.innerHTML = `
+        <div class="detail-card-cover-wrap">
+            <img src="${simTrack.coverUrl}" alt="${simTrack.title}" class="detail-card-cover">
+        </div>
+        <div class="detail-similarity-reason">
+            <span>${reason}</span>
+            ${scorePct ? `<span>${scorePct}</span>` : ""}
+        </div>
+        <h4 class="detail-card-title" data-open-song="${simTrack.id}" title="View Song Details: ${simTrack.title}">${simTrack.title}</h4>
+        <p class="detail-card-sub">
+            <button type="button" class="detail-inline-link" data-open-artist="${simTrack.primaryArtist}">${simTrack.artistDisplay}</button>
+            &bull;
+            <button type="button" class="detail-inline-link" data-open-album="${simTrack.album}">${simTrack.album}</button>
+        </p>
+        <div class="card-quick-actions" role="group" aria-label="Actions for similar track ${simTrack.title}">
+            <button type="button" class="card-action-btn" data-similar-action="play" title="Play ${simTrack.title}">
+                <span>Play</span>
+            </button>
+            <button type="button" class="card-action-btn" data-similar-action="play-next" title="Play ${simTrack.title} Next">
+                <span>Play Next</span>
+            </button>
+            <button type="button" class="card-action-btn" data-similar-action="add-to-queue" title="Add ${simTrack.title} to Queue">
+                <span>+ Queue</span>
+            </button>
+            <button type="button" class="card-action-btn mix-action-btn" data-similar-action="start-mix" title="Start Radio Mix from ${simTrack.title}">
+                <span>Mix</span>
+            </button>
+        </div>
+    `;
+
+    const songHeading = card.querySelector("[data-open-song]");
+    if (songHeading && typeof songHeading.addEventListener === "function") {
+        songHeading.addEventListener("click", (e) => {
+            e.stopPropagation();
+            openSongDetail(simTrack.id);
+        });
+    }
+
+    const artistBtn = card.querySelector("[data-open-artist]");
+    if (artistBtn && typeof artistBtn.addEventListener === "function") {
+        artistBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            openArtistDetail(simTrack.primaryArtist);
+        });
+    }
+
+    const albumBtn = card.querySelector("[data-open-album]");
+    if (albumBtn && typeof albumBtn.addEventListener === "function") {
+        albumBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            openAlbumDetail(simTrack.album);
+        });
+    }
+
+    if (typeof card.querySelectorAll === "function") {
+        card.querySelectorAll("[data-similar-action]").forEach((btn) => {
+            btn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const action = btn.dataset.similarAction;
+                if (action === "play") {
+                    playMusic(simTrack.id, false);
+                } else if (action === "play-next") {
+                    playTrackNext(simTrack.id);
+                } else if (action === "add-to-queue") {
+                    addTrackToQueue(simTrack.id);
+                } else if (action === "start-mix") {
+                    startRadioMix({ type: "track", track: simTrack });
+                }
+            });
+        });
+    }
+
+    card.addEventListener("click", () => {
+        playMusic(simTrack.id, false);
+    });
+    return card;
+}
+
+function renderDetailView(detailData) {
+    if (!detailData) return null;
+    const detailView = document.getElementById("detail-view");
+    const heroEl = document.getElementById("detail-hero");
+    const coverEl = document.getElementById("detail-cover");
+    const badgeEl = document.getElementById("detail-type-badge");
+    const eyebrowEl = document.getElementById("detail-eyebrow");
+    const headingEl = document.getElementById("detail-heading");
+    const subtitleEl = document.getElementById("detail-subtitle");
+    const breadcrumbsEl = document.getElementById("detail-breadcrumbs");
+    const metaPillsEl = document.getElementById("detail-meta-pills");
+    const collabsEl = document.getElementById("detail-collaborators");
+    const startMixBtn = document.getElementById("detail-start-mix-btn");
+    const startMixLabel = document.getElementById("detail-start-mix-label");
+    const playAllLabel = document.getElementById("detail-play-all-label");
+
+    const topTracksTitle = document.getElementById("detail-top-tracks-title");
+    const topTracksCount = document.getElementById("detail-top-tracks-count");
+    const topTracksContainer = document.getElementById("detail-top-tracks");
+
+    const audioProfileSection = document.getElementById("detail-audio-profile-section");
+    const audioProfileContainer = document.getElementById("detail-audio-profile");
+
+    const discographyTitle = document.getElementById("detail-discography-title");
+    const discographyCount = document.getElementById("detail-discography-count");
+    const discographyContainer = document.getElementById("detail-discography");
+
+    const similarTitle = document.getElementById("detail-similar-title");
+    const similarSubtitle = document.getElementById("detail-similar-subtitle");
+    const similarContainer = document.getElementById("detail-similar-tracks");
+
+    if (detailView) {
+        detailView.dataset.detailType = detailData.type;
+        detailView.dataset.detailId = detailData.id;
+    }
+    if (heroEl) {
+        heroEl.dataset.detailType = detailData.type;
+    }
+    if (coverEl) {
+        coverEl.src = detailData.coverUrl;
+        coverEl.alt = detailData.title;
+    }
+    if (badgeEl) {
+        badgeEl.textContent = detailData.badge;
+    }
+    if (eyebrowEl) {
+        eyebrowEl.textContent = detailData.eyebrow;
+    }
+    if (headingEl) {
+        headingEl.textContent = detailData.title;
+        headingEl.setAttribute("tabindex", "-1");
+    }
+    if (subtitleEl) {
+        subtitleEl.textContent = detailData.subtitle;
+    }
+
+    const mixBtnText =
+        detailData.type === "artist"
+            ? `Start ${detailData.title} Mix`
+            : detailData.type === "album"
+              ? "Start Album Mix"
+              : "Start Song Mix";
+    if (startMixLabel) {
+        startMixLabel.textContent = mixBtnText;
+    }
+    if (startMixBtn) {
+        startMixBtn.dataset.detailType = detailData.type;
+        startMixBtn.dataset.detailTarget = detailData.id;
+    }
+    if (playAllLabel) {
+        playAllLabel.textContent =
+            detailData.type === "artist"
+                ? "Play Top Tracks"
+                : detailData.type === "album"
+                  ? "Play Album"
+                  : "Play Song";
+    }
+
+    // Breadcrumbs
+    if (breadcrumbsEl) {
+        const crumbs = [];
+        const homeCrumb = document.createElement("button");
+        homeCrumb.type = "button";
+        homeCrumb.className = "detail-breadcrumb-btn";
+        homeCrumb.textContent = "Catalog";
+        homeCrumb.addEventListener("click", () => closeDetailView());
+        crumbs.push(homeCrumb);
+
+        if (detailData.type === "album" && detailData.primaryArtist) {
+            const artistCrumb = document.createElement("button");
+            artistCrumb.type = "button";
+            artistCrumb.className = "detail-breadcrumb-btn";
+            artistCrumb.dataset.openArtist = detailData.primaryArtist;
+            artistCrumb.textContent = detailData.primaryArtist;
+            artistCrumb.addEventListener("click", () => openArtistDetail(detailData.primaryArtist));
+            crumbs.push(artistCrumb);
+        } else if (detailData.type === "song") {
+            if (detailData.primaryArtist) {
+                const artistCrumb = document.createElement("button");
+                artistCrumb.type = "button";
+                artistCrumb.className = "detail-breadcrumb-btn";
+                artistCrumb.dataset.openArtist = detailData.primaryArtist;
+                artistCrumb.textContent = detailData.primaryArtist;
+                artistCrumb.addEventListener("click", () =>
+                    openArtistDetail(detailData.primaryArtist)
+                );
+                crumbs.push(artistCrumb);
+            }
+            if (detailData.album) {
+                const albumCrumb = document.createElement("button");
+                albumCrumb.type = "button";
+                albumCrumb.className = "detail-breadcrumb-btn";
+                albumCrumb.dataset.openAlbum = detailData.album;
+                albumCrumb.textContent = detailData.album;
+                albumCrumb.addEventListener("click", () => openAlbumDetail(detailData.album));
+                crumbs.push(albumCrumb);
+            }
+        }
+        breadcrumbsEl.replaceChildren(...crumbs);
+    }
+
+    // Meta Stat Pills
+    if (metaPillsEl) {
+        const pills = [
+            `<span class="detail-meta-pill accent-pill">${detailData.trackCount} ${detailData.trackCount === 1 ? "Track" : "Tracks"}</span>`,
+            `<span class="detail-meta-pill">${detailData.totalDurationFormatted}</span>`,
+            `<span class="detail-meta-pill">${detailData.avgBpm} BPM Avg</span>`,
+            `<span class="detail-meta-pill">${detailData.avgEnergyPct}% Energy</span>`,
+        ];
+        if (detailData.totalPlays > 0) {
+            pills.push(
+                `<span class="detail-meta-pill accent-pill">${detailData.totalPlays} ${detailData.totalPlays === 1 ? "Play" : "Plays"}</span>`
+            );
+        }
+        if (detailData.likedCount > 0) {
+            pills.push(
+                `<span class="detail-meta-pill accent-pill">♥ ${detailData.likedCount} Liked</span>`
+            );
+        }
+        for (const mood of (detailData.moods || []).slice(0, 4)) {
+            pills.push(`<span class="detail-meta-pill">${mood}</span>`);
+        }
+        metaPillsEl.innerHTML = pills.join("");
+    }
+
+    // Collaborator / Artist / Album Chips
+    if (collabsEl) {
+        const chipNodes = [];
+        for (const artistName of detailData.collaborators || []) {
+            const chip = document.createElement("button");
+            chip.type = "button";
+            chip.className = "detail-collab-chip";
+            chip.dataset.openArtist = artistName;
+            chip.textContent =
+                detailData.type === "artist" ? `Collab: ${artistName}` : `Artist: ${artistName}`;
+            chip.addEventListener("click", () => openArtistDetail(artistName));
+            chipNodes.push(chip);
+        }
+        if (detailData.type === "song" && detailData.album) {
+            const albumChip = document.createElement("button");
+            albumChip.type = "button";
+            albumChip.className = "detail-collab-chip";
+            albumChip.dataset.openAlbum = detailData.album;
+            albumChip.textContent = `Album: ${detailData.album}`;
+            albumChip.addEventListener("click", () => openAlbumDetail(detailData.album));
+            chipNodes.push(albumChip);
+        }
+        collabsEl.replaceChildren(...chipNodes);
+    }
+
+    // 1. Top Tracks / Album Tracklist
+    if (topTracksTitle) {
+        topTracksTitle.textContent =
+            detailData.type === "artist"
+                ? `Top Tracks by ${detailData.title}`
+                : detailData.type === "album"
+                  ? "Album Tracklist"
+                  : `Featured Song & More by ${detailData.primaryArtist}`;
+    }
+    if (topTracksCount) {
+        topTracksCount.textContent = `${detailData.topTracks.length} ${detailData.topTracks.length === 1 ? "track" : "tracks"}`;
+    }
+    if (topTracksContainer) {
+        const rowNodes = (detailData.topTracks || []).map((t, i) => createDetailTrackRowNode(t, i));
+        topTracksContainer.replaceChildren(...rowNodes);
+    }
+
+    // 2. Song Audio Profile & Taste Telemetry
+    if (audioProfileSection && audioProfileContainer) {
+        if (detailData.type === "song" && detailData.audioProfile) {
+            audioProfileSection.hidden = false;
+            const ap = detailData.audioProfile;
+            audioProfileContainer.innerHTML = ap.metrics
+                .map(
+                    (m) => `
+                <div class="feature-row">
+                    <div class="feature-row-header">
+                        <span>${m.label}</span>
+                        <span>${m.value}%</span>
+                    </div>
+                    <div class="feature-bar-track">
+                        <div class="feature-bar-fill" style="width: ${m.value}%"></div>
+                    </div>
+                </div>`
+                )
+                .join("");
+        } else {
+            audioProfileSection.hidden = true;
+            audioProfileContainer.innerHTML = "";
+        }
+    }
+
+    // 3. Discography & Albums
+    if (discographyTitle) {
+        discographyTitle.textContent =
+            detailData.type === "artist"
+                ? "Discography & Collaborator Releases"
+                : detailData.type === "album"
+                  ? `More by ${detailData.primaryArtist} & Related Albums`
+                  : "Featured Album & Artist Discography";
+    }
+    if (discographyCount) {
+        discographyCount.textContent = `${detailData.discography.length} ${detailData.discography.length === 1 ? "release" : "releases"}`;
+    }
+    if (discographyContainer) {
+        const albumNodes = (detailData.discography || []).map((alb) =>
+            createDetailDiscographyCardNode(alb)
+        );
+        discographyContainer.replaceChildren(...albumNodes);
+    }
+
+    // 4. Similar in Your Library Recommendations
+    if (similarTitle) {
+        similarTitle.textContent = "Similar in Your Library";
+    }
+    if (similarSubtitle) {
+        similarSubtitle.textContent = `${detailData.similarTracks.length} sonic & collaborator matches`;
+    }
+    if (similarContainer) {
+        const similarNodes = (detailData.similarTracks || []).map((sim) =>
+            createDetailSimilarTrackCardNode(sim)
+        );
+        similarContainer.replaceChildren(...similarNodes);
+    }
+
+    return detailData;
+}
+
+function openDetailView(spec = {}, options = {}) {
+    if (!songs.length) return null;
+
+    let type = "artist";
+    let target = null;
+
+    if (typeof spec === "string") {
+        // Resolve whether string matches an artist, album, or track
+        const lower = spec.trim().toLowerCase();
+        if (songs.some((t) => getTrackArtistList(t).some((a) => a.toLowerCase() === lower))) {
+            type = "artist";
+            target = spec;
+        } else if (songs.some((t) => String(t.album || "").toLowerCase() === lower)) {
+            type = "album";
+            target = spec;
+        } else {
+            type = "song";
+            target = spec;
+        }
+    } else if (spec && typeof spec === "object") {
+        const rawType = String(spec.type || "").toLowerCase();
+        if (rawType === "album" || (!rawType && spec.album && !spec.artist && !spec.track && !spec.trackId)) {
+            type = "album";
+            target = spec.album || spec.target || spec.id;
+        } else if (
+            rawType === "song" ||
+            rawType === "track" ||
+            (!rawType && (spec.track || spec.trackId))
+        ) {
+            type = "song";
+            target = spec.track || spec.trackId || spec.target || spec.id;
+        } else {
+            type = "artist";
+            target = spec.artist || spec.target || spec.id;
+        }
+    }
+
+    let detailData = null;
+    if (type === "album") {
+        detailData = buildAlbumDetailData(target, options);
+    } else if (type === "song") {
+        detailData = buildSongDetailData(target, options);
+    } else {
+        detailData = buildArtistDetailData(target, options);
+    }
+    if (!detailData) return null;
+
+    activeView = "detail";
+    activeDetail = {
+        type: detailData.type,
+        target: detailData.id,
+        id: detailData.id,
+        title: detailData.title,
+        data: detailData,
+    };
+
+    if (!options.skipHistory) {
+        pushNavState();
+    }
+
+    const detailView = document.getElementById("detail-view");
+    const searchView = document.getElementById("search-view");
+
+    runMainViewTransition(() => {
+        setHomeSectionsHidden(true);
+        if (searchView) searchView.hidden = true;
+        if (detailView) {
+            detailView.hidden = false;
+            detailView.setAttribute("aria-hidden", "false");
+            if (typeof detailView.removeAttribute === "function") {
+                detailView.removeAttribute("inert");
+            }
+        }
+        renderDetailView(detailData);
+    }, "detail-heading");
+
+    return detailData;
+}
+
+function openArtistDetail(artistName, options = {}) {
+    return openDetailView({ type: "artist", artist: artistName }, options);
+}
+
+function openAlbumDetail(albumName, options = {}) {
+    return openDetailView({ type: "album", album: albumName }, options);
+}
+
+function openSongDetail(trackOrId, options = {}) {
+    return openDetailView({ type: "song", track: trackOrId }, options);
+}
+
+function closeDetailView(options = {}) {
+    activeView = "home";
+    activeDetail = null;
+
+    if (!options.skipHistory) {
+        pushNavState();
+    }
+
+    const detailView = document.getElementById("detail-view");
+    runMainViewTransition(() => {
+        if (detailView) {
+            detailView.hidden = true;
+            detailView.setAttribute("aria-hidden", "true");
+            detailView.setAttribute("inert", "inert");
+        }
+        setHomeSectionsHidden(false);
+    }, "catalog-section-title");
+
+    return true;
+}
+
+function startDetailMix(options = {}) {
+    if (!activeDetail || !activeDetail.data) {
+        return startRadioMix({ type: "supermix" }, options);
+    }
+    return startRadioMix(activeDetail.data.seedSpec, options);
 }
 
 function setMoodFilter(mood) {
@@ -1396,6 +2952,9 @@ function setMoodFilter(mood) {
     const qm = getQueueManager();
     if (qm && typeof qm.setMoodFilter === "function") {
         qm.setMoodFilter(activeMoodFilter, { retune: true, silent: true });
+    }
+    if (activeView === "detail" && !isRestoringHistory) {
+        closeDetailView({ skipHistory: true });
     }
     pushNavState();
     renderCatalogGrid();
@@ -1759,6 +3318,8 @@ function handleShellKeyDown(event) {
         onEscape: () => {
             if (isShortcutsModalOpen) {
                 toggleShortcutsModal(false);
+            } else if (activeView === "detail") {
+                closeDetailView();
             }
         },
     };
@@ -1810,30 +3371,12 @@ function initShellControls() {
     const navForward = document.getElementById("nav-forward");
     if (navBack) {
         navBack.addEventListener("click", () => {
-            if (navHistoryIndex > 0) {
-                isRestoringHistory = true;
-                navHistoryIndex--;
-                const snap = navHistory[navHistoryIndex];
-                activeSearchQuery = snap.query;
-                if (searchInput) searchInput.value = snap.query;
-                if (searchClearBtn) searchClearBtn.hidden = !snap.query;
-                setMoodFilter(snap.mood);
-                isRestoringHistory = false;
-            }
+            navigateBack();
         });
     }
     if (navForward) {
         navForward.addEventListener("click", () => {
-            if (navHistoryIndex < navHistory.length - 1) {
-                isRestoringHistory = true;
-                navHistoryIndex++;
-                const snap = navHistory[navHistoryIndex];
-                activeSearchQuery = snap.query;
-                if (searchInput) searchInput.value = snap.query;
-                if (searchClearBtn) searchClearBtn.hidden = !snap.query;
-                setMoodFilter(snap.mood);
-                isRestoringHistory = false;
-            }
+            navigateForward();
         });
     }
 
@@ -1854,13 +3397,21 @@ function initShellControls() {
     const navHome = document.getElementById("nav-home");
     const navSearch = document.getElementById("nav-search");
     const navSupermix = document.getElementById("nav-supermix");
+    const brandLogoLink = document.getElementById("brand-logo-link");
     if (navHome) {
         navHome.addEventListener("click", (e) => {
             e.preventDefault();
             if (searchInput) searchInput.value = "";
             activeSearchQuery = "";
             if (searchClearBtn) searchClearBtn.hidden = true;
+            closeDetailView({ skipHistory: true });
             setMoodFilter("All");
+        });
+    }
+    if (brandLogoLink) {
+        brandLogoLink.addEventListener("click", (e) => {
+            e.preventDefault();
+            closeDetailView();
         });
     }
     if (navSearch && searchInput) {
@@ -1873,6 +3424,91 @@ function initShellControls() {
         navSupermix.addEventListener("click", (e) => {
             e.preventDefault();
             startRadioMix({ type: "supermix" });
+        });
+    }
+
+    // 5b. Detail View Hero & Action Buttons (Item 8)
+    const detailBackBtn = document.getElementById("detail-back-btn");
+    if (detailBackBtn) {
+        detailBackBtn.addEventListener("click", () => {
+            closeDetailView();
+        });
+    }
+
+    const detailStartMixBtn = document.getElementById("detail-start-mix-btn");
+    if (detailStartMixBtn) {
+        detailStartMixBtn.addEventListener("click", () => {
+            startDetailMix();
+        });
+    }
+
+    const detailPlayAllBtn = document.getElementById("detail-play-all-btn");
+    if (detailPlayAllBtn) {
+        detailPlayAllBtn.addEventListener("click", () => {
+            if (!activeDetail || !activeDetail.data) return;
+            const tracks = activeDetail.data.topTracks || [];
+            if (tracks.length > 0) {
+                playMusic(tracks[0].id, false);
+                for (let i = 1; i < tracks.length; i++) {
+                    addTrackToQueue(tracks[i].id);
+                }
+            }
+        });
+    }
+
+    const detailShuffleBtn = document.getElementById("detail-shuffle-btn");
+    if (detailShuffleBtn) {
+        detailShuffleBtn.addEventListener("click", () => {
+            if (!activeDetail || !activeDetail.data) return;
+            const tracks = activeDetail.data.topTracks || [];
+            const pick =
+                tracks.length > 0
+                    ? tracks[Math.floor(Math.random() * tracks.length)]
+                    : songs[currentTrackIndex];
+            startRadioMix(activeDetail.data.seedSpec, { startTrack: pick });
+        });
+    }
+
+    const detailQueueAllBtn = document.getElementById("detail-queue-all-btn");
+    if (detailQueueAllBtn) {
+        detailQueueAllBtn.addEventListener("click", () => {
+            if (!activeDetail || !activeDetail.data) return;
+            const tracks = activeDetail.data.topTracks || [];
+            for (const t of tracks) {
+                addTrackToQueue(t.id);
+            }
+        });
+    }
+
+    // 5c. Playbar & Track Info Drawer Entity Detail Links
+    const infoTitleEl = document.getElementById("info-title");
+    const infoCoverEl = document.getElementById("info-cover");
+    const infoArtistsEl = document.getElementById("info-artists");
+    const infoAlbumYearEl = document.getElementById("info-album-year");
+    const playbarCoverEl = document.getElementById("playbar-cover");
+    const playbarTitleEl = document.getElementsByClassName("song-title")[0];
+    const playbarArtistEl = document.getElementsByClassName("artist-names")[0];
+
+    for (const el of [infoTitleEl, infoCoverEl, playbarCoverEl, playbarTitleEl]) {
+        if (el && typeof el.addEventListener === "function") {
+            el.addEventListener("click", () => {
+                const track = songs[currentTrackIndex] || songs[0];
+                if (track) openSongDetail(track.id);
+            });
+        }
+    }
+    for (const el of [infoArtistsEl, playbarArtistEl]) {
+        if (el && typeof el.addEventListener === "function") {
+            el.addEventListener("click", () => {
+                const track = songs[currentTrackIndex] || songs[0];
+                if (track) openArtistDetail(track.primaryArtist);
+            });
+        }
+    }
+    if (infoAlbumYearEl && typeof infoAlbumYearEl.addEventListener === "function") {
+        infoAlbumYearEl.addEventListener("click", () => {
+            const track = songs[currentTrackIndex] || songs[0];
+            if (track) openAlbumDetail(track.album);
         });
     }
 
@@ -2354,6 +3990,18 @@ window.SpotTubeShell = {
     syncActiveTrackUI,
     syncMixTuningChipsUI,
     syncCrossfadeUI,
+    buildArtistDetailData,
+    buildAlbumDetailData,
+    buildSongDetailData,
+    openDetailView,
+    openArtistDetail,
+    openAlbumDetail,
+    openSongDetail,
+    closeDetailView,
+    renderDetailView,
+    startDetailMix,
+    navigateBack,
+    navigateForward,
     getState: () => ({
         songs,
         currentTrackIndex,
@@ -2367,6 +4015,10 @@ window.SpotTubeShell = {
         isRepeat,
         crossfadeSeconds,
         isShortcutsModalOpen,
+        activeView,
+        activeDetail,
+        navHistory: navHistory.slice(),
+        navHistoryIndex,
         likedTrackIds: Array.from(likedTrackIds),
     }),
     setState: (patch = {}) => {
