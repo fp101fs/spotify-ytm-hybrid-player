@@ -35,6 +35,10 @@ A static-first music player that mixes Spotify's 3-pane layout, Daily Mixes and 
 - A few public-domain and Creative Commons videos are offered as suggestions, with credits. They are listed in `yt-allowlist.json` (`id`, `title`, `artist`, plus optional `license`, `source`, `album`, `genre`, `moods`, …).
 - Sound goes through the app's server (`/api/yt`, using `@distube/ytdl-core`), so crossfade, mixes and MediaSession work. **Video** shows a muted copy that follows the audio, with captions when YouTube has them.
 - Without the server (plain static hosting), or when YouTube blocks the server (for example "Sign in to confirm you're not a bot", common on cloud hosts), videos open in YouTube's own player instead.
+- **Bot check fix: YouTube cookies.** The bot-check error offers **Add YouTube cookies** (also a 🍪 button under "Add YouTube video"). The modal walks through installing [Cookie-Editor](https://chromewebstore.google.com/detail/cookie-editor/hlkenndednhfkekhgcdicdfddnkalmdm), signing in on YouTube, and clicking **Export → JSON**. Paste the export into the dashed box, or drop or choose a saved file. It also accepts a Netscape `cookies.txt` or a raw `Cookie` header. Use a spare Google account.
+  - The server (`POST /api/yt/cookies`) keeps only the youtube.com sign-in cookies. It returns them to the browser as HttpOnly, SameSite=Strict cookies on `/api/yt`, and the server stores nothing, so it works the same on Vercel and with `npm start`. `DELETE /api/yt/cookies` (**Remove saved cookies**) forgets them.
+  - Expired cookies give a `COOKIE_EXPIRED` error, which clears them and offers the modal again.
+  - Avoid the extension named "EditThisCookie": the original was removed from the Chrome Web Store, and the one now using that name is a reported credential-stealing copycat.
 - Only the added video IDs and their titles are saved in the browser. Thumbnails and the fallback player load from Google (`i.ytimg.com`, `youtube-nocookie.com`).
 
 ## Run locally
@@ -59,7 +63,7 @@ Songs you import in the browser don't need any of this; they stay on that device
 
 ## Deploy
 
-Click the button above, or with the Vercel CLI: `vercel --prod`. `vercel.json` sets the build command (`node scripts/build-catalog.js`), serves the repo root as static output, and adds `Accept-Ranges` and long-cache headers for `songs/` and `Images/`. `api/yt.js` deploys as a Vercel function (60 s, 1 GB). YouTube may bot-check Vercel's servers; the app then falls back to YouTube's player.
+Click the button above, or with the Vercel CLI: `vercel --prod`. `vercel.json` sets the build command (`node scripts/build-catalog.js`), serves the repo root as static output, and adds `Accept-Ranges` and long-cache headers for `songs/` and `Images/`. `api/yt.js` deploys as a Vercel function (60 s, 1 GB). YouTube may bot-check Vercel's servers; add YouTube cookies (see above) or the app falls back to YouTube's player.
 
 ## Tests
 
@@ -81,7 +85,7 @@ npm run test:yt        # optional live check against YouTube
 | `library.js` | local import, tag parsing, playlists |
 | `metadata-lookup.js` | optional MusicBrainz / Cover Art Archive / iTunes lookup |
 | `youtube.js` | YouTube link parsing, suggestions, tracks (browser + server) |
-| `api/yt.js`, `api/_lib/` | `/api/yt` function: info, audio/video streams, captions |
+| `api/yt.js`, `api/_lib/` | `/api/yt` function: info, audio/video streams, captions, YouTube cookies (`yt-cookies.js`) |
 | `yt-allowlist.json` | suggested YouTube videos and their credits |
 | `scripts/dev-server.js` | local server for the app and `/api` |
 | `scripts/build-catalog.js` | builds `tracks.json` |

@@ -3,7 +3,7 @@
  * Item 16: the only file that knows about the YouTube library. To swap libraries, write another
  * adapter with the same three methods and pass it to `createYtHandler({ adapter })`.
  *
- *   getInfo(id, { signal })          → { id, title, channel, duration, thumbnails, formats, captions, expiresAt, raw }
+ *   getInfo(id, { signal, cookie })  → { id, title, channel, duration, thumbnails, formats, captions, expiresAt, raw }
  *   openStream(info, format, opts)   → Node Readable of bytes opts.start..opts.end (inclusive)
  *   getCaptions(info, lang)          → WebVTT text
  *
@@ -51,10 +51,21 @@ function normalizeFormat(f) {
 }
 
 function createYtdlAdapter(options = {}) {
-    let instance = null;
-    async function ytdl() {
+    // One instance per network identity: the anonymous one, plus one per signed-in cookie (few, so a small cap).
+    const instances = new Map(); // cookie header ("" = signed out) → Ytdl
+    async function ytdl(cookie = "") {
         const lib = await loadLibrary();
-        if (!instance) instance = new lib.Ytdl({ timeoutMs: options.timeoutMs || 20000 });
+        let instance = instances.get(cookie);
+        if (!instance) {
+            const opts = { timeoutMs: options.timeoutMs || 20000 };
+            if (cookie) opts.cookie = cookie;
+            instance = new lib.Ytdl(opts);
+            instances.set(cookie, instance);
+            if (instances.size > 5) {
+                const oldest = [...instances.keys()].find((k) => k !== "" && k !== cookie);
+                if (oldest !== undefined) instances.delete(oldest);
+            }
+        }
         return { lib, instance };
     }
 
@@ -62,8 +73,8 @@ function createYtdlAdapter(options = {}) {
         name: LIBRARY,
         version: libraryVersion(),
 
-        async getInfo(id, { signal } = {}) {
-            const { instance: y } = await ytdl();
+        async getInfo(id, { signal, cookie } = {}) {
+            const { instance: y } = await ytdl(cookie || "");
             const info = await y.getInfo(id, { signal });
             const d = info.videoDetails || {};
             return {
@@ -82,11 +93,12 @@ function createYtdlAdapter(options = {}) {
                 })),
                 expiresAt: Number(info.expiresAt) || Date.now() + 5 * 60 * 1000,
                 raw: info,
+                cookie: cookie || "",
             };
         },
 
         async openStream(info, format, { start, end, signal } = {}) {
-            const { instance: y } = await ytdl();
+            const { instance: y } = await ytdl(info.cookie || "");
             const range = {};
             if (Number.isFinite(start)) range.start = start;
             if (Number.isFinite(end)) range.end = end;
@@ -94,7 +106,7 @@ function createYtdlAdapter(options = {}) {
         },
 
         async getCaptions(info, lang) {
-            const { lib, instance: y } = await ytdl();
+            const { lib, instance: y } = await ytdl(info.cookie || "");
             return y.getCaptions(info.raw, { lang, format: lib.CaptionFormat ? lib.CaptionFormat.Vtt : undefined });
         },
     };

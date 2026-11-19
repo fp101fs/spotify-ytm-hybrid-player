@@ -194,7 +194,8 @@
     const ERROR_MESSAGES = {
         INVALID_ID: "That doesn't look like a YouTube video link. Paste a watch, youtu.be, Shorts or music.youtube.com link.",
         BOT_CHECK:
-            "YouTube asked this server to confirm it isn't a bot (“Sign in to confirm you're not a bot”). This happens most on cloud hosts. Try again later, run the app on your own computer with npm start, or watch it in YouTube's player.",
+            "YouTube asked this server to confirm it isn't a bot (“Sign in to confirm you're not a bot”). This happens most on cloud hosts. Add your YouTube cookies to fix it, run the app on your own computer with npm start, or watch it in YouTube's player.",
+        COOKIE_EXPIRED: "Your saved YouTube cookies have expired or were signed out. Add fresh ones to keep playing videos here.",
         AGE_RESTRICTED: "YouTube has made this video age-restricted, so it can't be played without signing in.",
         REGION_BLOCKED: "This video isn't available in the server's country.",
         NOT_FOUND: "This video was removed from YouTube or made private.",
@@ -212,7 +213,12 @@
 
     /** Whether the code means "watch it with YouTube's own player instead" is worth offering. */
     function canFallBackToEmbed(code) {
-        return ["BOT_CHECK", "RATE_LIMITED", "UPSTREAM", "NO_FORMAT", "NO_SERVER", "REGION_BLOCKED"].includes(code);
+        return ["BOT_CHECK", "COOKIE_EXPIRED", "RATE_LIMITED", "UPSTREAM", "NO_FORMAT", "NO_SERVER", "REGION_BLOCKED"].includes(code);
+    }
+
+    /** Whether adding YouTube sign-in cookies would fix this error. */
+    function needsCookies(code) {
+        return code === "BOT_CHECK" || code === "COOKIE_EXPIRED";
     }
 
     /**
@@ -248,6 +254,7 @@
         describeYtError,
         canFallBackToEmbed,
         computeVideoSync,
+        needsCookies,
         ERROR_MESSAGES,
     };
 });

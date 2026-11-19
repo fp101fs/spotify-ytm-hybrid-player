@@ -196,8 +196,9 @@ function fakeAdapter(overrides = {}) {
         version: "0.0.0",
         bytes,
         calls,
-        async getInfo(id) {
+        async getInfo(id, opts = {}) {
             calls.getInfo++;
+            calls.lastCookie = opts.cookie || "";
             if (overrides.infoError) throw overrides.infoError;
             return {
                 id,
@@ -248,7 +249,7 @@ test("handler: status, info, any video ID and invalid IDs", async () => {
     const handler = Server.createYtHandler({ adapter, allowlist: ALLOWLIST, log: null });
     await withServer(handler, async (base) => {
         const status = await (await fetch(`${base}/api/yt/status`)).json();
-        assert.deepStrictEqual(status, { ok: true, backend: "fake-ytdl", version: "0.0.0", videos: ALLOWLIST.videos.length, invalidEntries: [] });
+        assert.deepStrictEqual(status, { ok: true, backend: "fake-ytdl", version: "0.0.0", videos: ALLOWLIST.videos.length, signedIn: false, invalidEntries: [] });
 
         const res = await fetch(`${base}/api/yt/info?id=${ID}`);
         assert.strictEqual(res.status, 200);
@@ -638,4 +639,78 @@ test("resolveTrackIndex finds YouTube tracks by id (they have no filename)", asy
     for (const t of tracks) assert.strictEqual(songs[shell.resolveTrackIndex(t)].id, t.id);
     shell.playMusic(tracks[2]);
     assert.strictEqual(shell.getState().songs[shell.getState().currentTrackIndex].id, tracks[2].id);
+});
+
+// ---------- YouTube cookies ----------
+
+const Cookies = require("../api/_lib/yt-cookies.js");
+
+const COOKIE_EDITOR_EXPORT = [
+    { domain: ".youtube.com", name: "SAPISID", value: "abc/DEF", httpOnly: false },
+    { domain: ".youtube.com", name: "__Secure-3PAPISID", value: "x3p", httpOnly: false },
+    { domain: ".youtube.com", name: "LOGIN_INFO", value: "AFmmF2sw:QUQ3MjNm=", httpOnly: true },
+    { domain: ".youtube.com", name: "YSC", value: "notneeded" },
+    { domain: ".google.com", name: "SID", value: "googleonly" },
+];
+
+test("cookies: Cookie-Editor JSON, cookies.txt and header → sign-in Cookie header", () => {
+    const { header, count } = Cookies.toCookieHeader(JSON.stringify(COOKIE_EDITOR_EXPORT));
+    assert.strictEqual(header, "SAPISID=abc/DEF; __Secure-3PAPISID=x3p; LOGIN_INFO=AFmmF2sw:QUQ3MjNm=");
+    assert.strictEqual(count, 3);
+
+    const txt = "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tSAPISID\tzz\n#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t0\tSID\tss\n";
+    assert.strictEqual(Cookies.toCookieHeader(txt).header, "SAPISID=zz; SID=ss");
+    assert.strictEqual(Cookies.toCookieHeader("Cookie: PREF=f6=1; SAPISID=q").header, "SAPISID=q; PREF=f6=1");
+
+    for (const bad of ["", "hello", "[]", JSON.stringify([{ domain: ".youtube.com", name: "PREF", value: "1" }])]) {
+        assert.throws(() => Cookies.toCookieHeader(bad), (e) => e.code === "COOKIE_INVALID");
+    }
+});
+
+test("cookies: saved as chunked HttpOnly cookies and read back", () => {
+    const big = `SAPISID=a; LOGIN_INFO=${"x".repeat(9000)}`;
+    const set = Cookies.authSetCookies({ headers: { "x-forwarded-proto": "https" } }, big);
+    assert.strictEqual(set.length, 4);
+    assert.ok(set.every((c) => /HttpOnly; SameSite=Strict; Secure/.test(c) && /Path=\/api\/yt/.test(c)));
+    const jar = set.map((c) => c.split(";")[0]).join("; ");
+    assert.strictEqual(Cookies.readAuth({ headers: { cookie: jar } }), big);
+    assert.ok(Cookies.authSetCookies({ headers: {} }, "").every((c) => /Max-Age=0/.test(c) && !/Secure/.test(c)));
+});
+
+test("handler: POST/DELETE /api/yt/cookies and signed-in lookups", async () => {
+    const adapter = fakeAdapter();
+    const handler = Server.createYtHandler({ adapter, allowlist: ALLOWLIST, log: null });
+    await withServer(handler, async (base) => {
+        let res = await fetch(`${base}/api/yt/cookies`, { method: "POST", body: "nope" });
+        assert.strictEqual(res.status, 400);
+        assert.strictEqual((await res.json()).error.code, "COOKIE_INVALID");
+
+        res = await fetch(`${base}/api/yt/cookies`, { method: "POST", body: "x", headers: { Origin: "https://evil.example" } });
+        assert.strictEqual(res.status, 403);
+
+        res = await fetch(`${base}/api/yt/cookies`, { method: "POST", body: JSON.stringify(COOKIE_EDITOR_EXPORT) });
+        assert.strictEqual(res.status, 200);
+        assert.deepStrictEqual(await res.json(), { ok: true, signedIn: true, count: 3 });
+        const jar = res.headers.getSetCookie().map((c) => c.split(";")[0]).filter((c) => !c.endsWith("=")).join("; ");
+
+        const status = await (await fetch(`${base}/api/yt/status`, { headers: { cookie: jar } })).json();
+        assert.strictEqual(status.signedIn, true);
+        await fetch(`${base}/api/yt/info?id=${ID}`, { headers: { cookie: jar } });
+        assert.strictEqual(adapter.calls.lastCookie, "SAPISID=abc/DEF; __Secure-3PAPISID=x3p; LOGIN_INFO=AFmmF2sw:QUQ3MjNm=");
+
+        res = await fetch(`${base}/api/yt/cookies`, { method: "DELETE", headers: { cookie: jar } });
+        assert.ok(res.headers.getSetCookie().every((c) => /Max-Age=0/.test(c)));
+    });
+});
+
+test("handler: an expired cookie maps to COOKIE_EXPIRED and is cleared", async () => {
+    const expired = Object.assign(new Error("YouTube treats the cookie as signed out"), { code: "AUTH_FAILED" });
+    const handler = Server.createYtHandler({ adapter: fakeAdapter({ infoError: expired }), allowlist: ALLOWLIST, log: null });
+    await withServer(handler, async (base) => {
+        const res = await fetch(`${base}/api/yt/info?id=${ID}`, { headers: { cookie: "yt_auth_0=SAPISID%3Da" } });
+        assert.strictEqual(res.status, 401);
+        assert.strictEqual((await res.json()).error.code, "COOKIE_EXPIRED");
+        assert.ok(res.headers.getSetCookie().some((c) => /^yt_auth_0=;/.test(c)));
+    });
+    assert.ok(YT.needsCookies("BOT_CHECK") && YT.needsCookies("COOKIE_EXPIRED") && !YT.needsCookies("NOT_FOUND"));
 });

@@ -6,6 +6,8 @@
  *   GET /api/yt/info?id=                    → title, channel, duration, thumbnails, license, chosen formats, captions
  *   GET|HEAD /api/yt/stream?id=&kind=audio|video → bytes proxied from YouTube, Range/206 supported
  *   GET /api/yt/captions?id=&lang=          → WebVTT
+ *   POST /api/yt/cookies (export JSON/text) → saves YouTube sign-in cookies as HttpOnly cookies (see yt-cookies.js)
+ *   DELETE /api/yt/cookies                  → forgets them
  *
  * Any valid video ID is served (the app shows a rights notice; yt-allowlist.json is only the suggestions and
  * their credits). The googlevideo URLs are tied to the server's IP and send no
@@ -13,7 +15,9 @@
  */
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const YT = require("../../youtube.js");
+const Cookies = require("./yt-cookies.js");
 
 const ALLOWLIST_PATH = path.join(__dirname, "..", "..", "yt-allowlist.json");
 const DEFAULT_MAX_CHUNK = 4 * 1024 * 1024;
@@ -162,6 +166,8 @@ class YtRequestError extends Error {
 const STATUS = {
     INVALID_ID: 400,
     BOT_CHECK: 503,
+    COOKIE_EXPIRED: 401,
+    COOKIE_INVALID: 400,
     AGE_RESTRICTED: 403,
     REGION_BLOCKED: 451,
     NOT_FOUND: 404,
@@ -176,8 +182,10 @@ function mapYtError(err) {
     const libCode = err && typeof err.code === "string" ? err.code : "";
     const text = String((err && err.message) || "");
     let code;
-    if (err instanceof YtRequestError) {
+    if (err instanceof YtRequestError || libCode === "COOKIE_INVALID") {
         code = err.code;
+    } else if (libCode === "AUTH_FAILED" || (libCode === "INVALID_ARGUMENT" && /cookie/i.test(text))) {
+        code = "COOKIE_EXPIRED";
     } else if (libCode === "BOT_CHECK" || /sign in to confirm you.?re not a bot|confirm (that )?you.?re not a bot/i.test(text)) {
         code = "BOT_CHECK";
     } else if (libCode === "AGE_RESTRICTED" || /age.?restricted|confirm your age|inappropriate for some users/i.test(text)) {
@@ -200,7 +208,7 @@ function mapYtError(err) {
     return {
         status: STATUS[code] || 502,
         code,
-        message: YT.describeYtError(code),
+        message: code === "COOKIE_INVALID" ? text : YT.describeYtError(code),
         embed: YT.canFallBackToEmbed(code),
     };
 }
@@ -223,12 +231,30 @@ function sendJson(res, status, body, extraHeaders = {}) {
     res.end(json);
 }
 
-function sendError(res, err, log) {
+function sendError(res, err, log, req) {
     const mapped = mapYtError(err);
     if (log && mapped.code !== "INVALID_ID") {
         log.warn(`[yt] ${mapped.code}: ${String((err && err.message) || err).slice(0, 300)}`);
     }
-    sendJson(res, mapped.status, { error: { code: mapped.code, message: mapped.message, embed: mapped.embed } });
+    const extra = mapped.code === "COOKIE_EXPIRED" && req ? { "Set-Cookie": Cookies.authSetCookies(req, "") } : {};
+    sendJson(res, mapped.status, { error: { code: mapped.code, message: mapped.message, embed: mapped.embed } }, extra);
+}
+
+const MAX_BODY = 512 * 1024;
+
+/** The request body as text; Vercel may have parsed it into `req.body` already. */
+async function readBody(req) {
+    if (req.body !== undefined && req.body !== null) {
+        return typeof req.body === "string" || Buffer.isBuffer(req.body) ? req.body : JSON.stringify(req.body);
+    }
+    const chunks = [];
+    let size = 0;
+    for await (const chunk of req) {
+        size += chunk.length;
+        if (size > MAX_BODY) throw new YtRequestError("COOKIE_INVALID", 413, "That file is too big to be a cookie export.");
+        chunks.push(chunk);
+    }
+    return Buffer.concat(chunks).toString("utf8");
 }
 
 function routeOf(url) {
@@ -255,26 +281,28 @@ function createYtHandler(options = {}) {
         return { id, entry: getAllowlist().byId.get(id) || null };
     }
 
-    function getInfo(id, signal) {
-        const cached = infoCache.get(id);
+    function getInfo(id, cookie = "") {
+        // Signed-in and signed-out lookups can differ (bot check), so they're cached apart
+        const key = cookie ? `${id}|${crypto.createHash("sha256").update(cookie).digest("hex").slice(0, 16)}` : id;
+        const cached = infoCache.get(key);
         if (cached && cached.expiresAt > now()) return cached.promise;
-        const promise = adapter.getInfo(id, { signal }).then((info) => {
+        const promise = adapter.getInfo(id, cookie ? { cookie } : {}).then((info) => {
             // Refresh a minute before YouTube's URLs expire
             slot.expiresAt = Math.min(Number(info.expiresAt) || now() + 300000, now() + 6 * 3600000) - 60000;
             return info;
         });
         const slot = { promise, expiresAt: now() + 60000 };
-        infoCache.set(id, slot);
+        infoCache.set(key, slot);
         promise.catch(() => {
-            if (infoCache.get(id) === slot) infoCache.delete(id);
+            if (infoCache.get(key) === slot) infoCache.delete(key);
         });
         if (infoCache.size > 64) infoCache.delete(infoCache.keys().next().value);
         return promise;
     }
 
-    async function handleInfo(url, res) {
+    async function handleInfo(req, url, res) {
         const { id, entry } = requireId(url.searchParams.get("id"));
-        const info = await getInfo(id);
+        const info = await getInfo(id, Cookies.readAuth(req));
         const thumbs = (info.thumbnails || []).slice().sort((a, b) => (b.width || 0) - (a.width || 0));
         sendJson(res, 200, {
             id,
@@ -304,7 +332,8 @@ function createYtHandler(options = {}) {
     async function handleStream(req, url, res) {
         const { id } = requireId(url.searchParams.get("id"));
         const kind = url.searchParams.get("kind") === "video" ? "video" : "audio";
-        const info = await getInfo(id);
+        const cookie = Cookies.readAuth(req);
+        const info = await getInfo(id, cookie);
         const format = chooseFormat(info.formats, kind);
         if (!format) throw Object.assign(new Error(`no ${kind} format`), { code: "NO_FORMAT" });
 
@@ -362,7 +391,9 @@ function createYtHandler(options = {}) {
         }).catch((err) => {
             stream.destroy();
             if (controller.signal.aborted) return null;
-            if (infoCache.get(id)) infoCache.delete(id);
+            infoCache.forEach((slot, key) => {
+                if (key === id || key.startsWith(`${id}|`)) infoCache.delete(key);
+            });
             throw err;
         });
         if (controller.signal.aborted) {
@@ -377,9 +408,9 @@ function createYtHandler(options = {}) {
         stream.pipe(res);
     }
 
-    async function handleCaptions(url, res) {
+    async function handleCaptions(req, url, res) {
         const { id } = requireId(url.searchParams.get("id"));
-        const info = await getInfo(id);
+        const info = await getInfo(id, Cookies.readAuth(req));
         const lang = String(url.searchParams.get("lang") || "");
         const track = (info.captions || []).find((c) => c.lang === lang);
         if (!track) {
@@ -398,9 +429,43 @@ function createYtHandler(options = {}) {
         res.end(text);
     }
 
+    /** POST saves an exported cookie list as HttpOnly cookies on /api/yt; DELETE forgets it; GET says if one is saved. */
+    async function handleCookies(req, res) {
+        try {
+            if (req.method === "GET") {
+                sendJson(res, 200, { signedIn: Boolean(Cookies.readAuth(req)) });
+                return;
+            }
+            if (req.method !== "POST" && req.method !== "DELETE") {
+                sendJson(res, 405, { error: { code: "METHOD", message: "Use POST or DELETE." } }, { Allow: "GET, POST, DELETE" });
+                return;
+            }
+            // Only this app's own pages may set or clear them
+            const origin = req.headers.origin;
+            const host = req.headers["x-forwarded-host"] || req.headers.host;
+            if (origin && host && new URL(origin).host !== String(host).split(",")[0].trim()) {
+                sendJson(res, 403, { error: { code: "ORIGIN", message: "Cross-site request refused." } });
+                return;
+            }
+            if (req.method === "DELETE") {
+                for (const slot of infoCache.keys()) if (slot.includes("|")) infoCache.delete(slot);
+                sendJson(res, 200, { ok: true, signedIn: false }, { "Set-Cookie": Cookies.authSetCookies(req, "") });
+                return;
+            }
+            const { header, count } = Cookies.toCookieHeader(await readBody(req));
+            sendJson(res, 200, { ok: true, signedIn: true, count }, { "Set-Cookie": Cookies.authSetCookies(req, header) });
+        } catch (err) {
+            sendError(res, err, log, req);
+        }
+    }
+
     return async function ytHandler(req, res) {
         const url = new URL(req.url || "/", "http://localhost");
         const route = routeOf(url);
+        if (route === "cookies") {
+            await handleCookies(req, res);
+            return;
+        }
         if (req.method !== "GET" && req.method !== "HEAD") {
             sendJson(res, 405, { error: { code: "METHOD", message: "Use GET." } }, { Allow: "GET, HEAD" });
             return;
@@ -413,14 +478,15 @@ function createYtHandler(options = {}) {
                     backend: adapter ? adapter.name : null,
                     version: adapter ? adapter.version : null,
                     videos: list.entries.length,
+                    signedIn: Boolean(Cookies.readAuth(req)),
                     invalidEntries: list.errors,
                 });
-            } else if (route === "info") await handleInfo(url, res);
+            } else if (route === "info") await handleInfo(req, url, res);
             else if (route === "stream") await handleStream(req, url, res);
-            else if (route === "captions") await handleCaptions(url, res);
+            else if (route === "captions") await handleCaptions(req, url, res);
             else sendJson(res, 404, { error: { code: "NO_ROUTE", message: "Unknown /api/yt route." } });
         } catch (err) {
-            sendError(res, err, log);
+            sendError(res, err, log, req);
         }
     };
 }

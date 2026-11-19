@@ -457,6 +457,7 @@
                                         <p class="yt-add-status" id="yt-add-status" role="status" aria-live="polite"></p>
                                     </form>
                                     <p class="yt-server-status" id="yt-server-status"></p>
+                                    <button type="button" class="hero-secondary-btn yt-cookies-open-btn" id="yt-cookies-open-btn"><span aria-hidden="true">🍪</span> <span id="yt-cookies-open-label">Add YouTube cookies</span></button>
                                     <div class="yt-available" id="yt-available" hidden>
                                         <div class="yt-available-head">
                                             <h3 class="yt-available-title" id="yt-available-title">Suggested: public-domain &amp; Creative Commons</h3>
@@ -1007,6 +1008,42 @@
                 </section>
                 <div class="playlist-dialog-actions">
                     <button type="button" class="hero-primary-btn" id="settings-done-btn">Done</button>
+                </div>
+            </div>
+        </dialog>
+
+        <dialog class="shortcuts-dialog playlist-dialog yt-cookies-dialog" id="yt-cookies-dialog" aria-labelledby="yt-cookies-title" aria-describedby="yt-cookies-intro" hidden>
+            <div class="shortcuts-dialog-card playlist-dialog-card">
+                <div class="shortcuts-dialog-header">
+                    <h2 id="yt-cookies-title">Add YouTube cookies</h2>
+                    <button type="button" class="drawer-close-btn" id="yt-cookies-close-btn" aria-label="Close">&times;</button>
+                </div>
+                <p class="yt-cookies-intro" id="yt-cookies-intro">Lets this app play YouTube videos as you, so YouTube stops asking if it's a bot.</p>
+                <ol class="yt-cookies-steps">
+                    <li>
+                        <span>Install <strong>Cookie-Editor</strong></span>
+                        <a class="yt-cookies-link" href="https://chromewebstore.google.com/detail/cookie-editor/hlkenndednhfkekhgcdicdfddnkalmdm" target="_blank" rel="noopener noreferrer">Open Web Store <span aria-hidden="true">↗</span><span class="visually-hidden"> (opens in a new tab)</span></a>
+                    </li>
+                    <li>
+                        <span>Go to YouTube and sign in</span>
+                        <a class="yt-cookies-link" href="https://www.youtube.com/" target="_blank" rel="noopener noreferrer">Open YouTube <span aria-hidden="true">↗</span><span class="visually-hidden"> (opens in a new tab)</span></a>
+                    </li>
+                    <li><span>Click the cookie extension <span class="yt-cookies-emoji" role="img" aria-label="cookie">🍪</span></span></li>
+                    <li>
+                        <span>Click <strong class="yt-cookies-export"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" focusable="false"><path fill="currentColor" d="M11 3h2v10.17l3.59-3.58L18 11l-6 6-6-6 1.41-1.41L11 13.17V3zM5 19h14v2H5z"/></svg>Export</strong>, then <strong>JSON</strong> (it's copied)</span>
+                    </li>
+                    <li><span>Paste it here, or save it as a file and drop it on the box</span></li>
+                </ol>
+                <div class="yt-cookies-drop" id="yt-cookies-drop" tabindex="0" role="button" aria-describedby="yt-cookies-drop-hint">
+                    <span class="yt-cookies-drop-icon" aria-hidden="true">🍪</span>
+                    <span class="yt-cookies-drop-text" id="yt-cookies-drop-hint">Drop the file here, or click and press <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>V</kbd></span>
+                    <label class="yt-cookies-pick">or <span class="yt-cookies-pick-link">choose a file</span><input type="file" id="yt-cookies-file" accept=".json,.txt,application/json,text/plain" class="visually-hidden"></label>
+                </div>
+                <p class="yt-cookies-status" id="yt-cookies-status" role="status" aria-live="polite"></p>
+                <p class="yt-cookies-note">Tip: use a spare Google account. The cookies are kept as private cookies for this site and are only used to fetch videos.</p>
+                <div class="playlist-dialog-actions">
+                    <button type="button" class="hero-secondary-btn" id="yt-cookies-remove-btn" hidden>Remove saved cookies</button>
+                    <button type="button" class="hero-primary-btn" id="yt-cookies-done-btn">Done</button>
                 </div>
             </div>
         </dialog>

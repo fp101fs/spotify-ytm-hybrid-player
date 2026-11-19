@@ -10131,14 +10131,190 @@ async function handleYouTubePlaybackError(track) {
     showLibraryToast(message, {
         error: true,
         timeoutMs: 0,
-        action: YT.canFallBackToEmbed(code)
-            ? { label: "Watch in YouTube's player", onClick: () => openYouTubeEmbed(track, { withSound: true }) }
-            : null,
+        action: YT.needsCookies && YT.needsCookies(code)
+            ? { label: "Add YouTube cookies", onClick: () => openYouTubeCookiesDialog() }
+            : YT.canFallBackToEmbed(code)
+              ? { label: "Watch in YouTube's player", onClick: () => openYouTubeEmbed(track, { withSound: true }) }
+              : null,
     });
     return code;
 }
 
+// ---------- YouTube cookies (fix for "Sign in to confirm you're not a bot") ----------
+
+const ytCookies = { signedIn: false, returnFocus: null, busy: false };
+
+function setYouTubeCookiesStatus(message, kind = "") {
+    const el = document.getElementById("yt-cookies-status");
+    if (!el) return;
+    el.textContent = message || "";
+    el.classList.toggle("is-ok", kind === "ok");
+    el.classList.toggle("is-error", kind === "error");
+}
+
+function renderYouTubeCookiesState() {
+    const remove = document.getElementById("yt-cookies-remove-btn");
+    if (remove) remove.hidden = !ytCookies.signedIn;
+    const label = document.getElementById("yt-cookies-open-label");
+    if (label) label.textContent = ytCookies.signedIn ? "YouTube cookies added" : "Add YouTube cookies";
+    const drop = document.getElementById("yt-cookies-drop");
+    if (drop && drop.classList) drop.classList.toggle("is-done", ytCookies.signedIn);
+}
+
+async function refreshYouTubeCookiesState() {
+    try {
+        const res = await fetch("./api/yt/cookies", { cache: "no-store" });
+        if (res.ok) ytCookies.signedIn = Boolean((await res.json()).signedIn);
+    } catch (_) {}
+    renderYouTubeCookiesState();
+}
+
+function openYouTubeCookiesDialog(options = {}) {
+    const dialog = document.getElementById("yt-cookies-dialog");
+    if (!dialog) return;
+    ytCookies.returnFocus = options.returnFocus || document.activeElement || null;
+    setYouTubeCookiesStatus(ytCookies.signedIn ? "Cookies are saved. Add new ones any time they stop working." : "");
+    renderYouTubeCookiesState();
+    setDialogOpen(dialog, true);
+    refreshYouTubeCookiesState();
+}
+
+function closeYouTubeCookiesDialog() {
+    setDialogOpen(document.getElementById("yt-cookies-dialog"), false);
+    const back = ytCookies.returnFocus;
+    ytCookies.returnFocus = null;
+    if (back && typeof back.focus === "function" && document.contains && document.contains(back)) back.focus();
+}
+
+/** Sends a cookie export (Cookie-Editor JSON, cookies.txt or a Cookie header) to the server. */
+async function submitYouTubeCookies(text) {
+    const body = String(text || "").trim();
+    if (!body) {
+        setYouTubeCookiesStatus("That was empty. In Cookie-Editor click Export, then JSON, then paste here.", "error");
+        return false;
+    }
+    if (ytCookies.busy) return false;
+    ytCookies.busy = true;
+    setYouTubeCookiesStatus("Saving…");
+    try {
+        const res = await fetch("./api/yt/cookies", {
+            method: "POST",
+            headers: { "Content-Type": "text/plain;charset=UTF-8" },
+            body,
+        });
+        const type = (res.headers && res.headers.get && res.headers.get("content-type")) || "";
+        const data = /json/.test(type) ? await res.json() : null;
+        if (!data) {
+            setYouTubeCookiesStatus(getYouTubeModule()?.describeYtError("NO_SERVER") || "The app's server isn't running.", "error");
+            return false;
+        }
+        if (!res.ok) {
+            setYouTubeCookiesStatus((data.error && data.error.message) || "Couldn't save those cookies.", "error");
+            return false;
+        }
+        ytCookies.signedIn = true;
+        ytFailedTrackIds.clear(); // retry videos that hit the bot check
+        syncQueueCatalog();
+        renderYouTubeCookiesState();
+        setYouTubeCookiesStatus("Saved ✓ YouTube videos will now play as you.", "ok");
+        setTimeout(() => {
+            const dialog = document.getElementById("yt-cookies-dialog");
+            if (dialog && dialog.open) closeYouTubeCookiesDialog();
+            showLibraryToast("YouTube cookies saved. Press play to try again.");
+        }, 1200);
+        return true;
+    } catch (_) {
+        setYouTubeCookiesStatus("Couldn't reach the app's server. Check the connection and try again.", "error");
+        return false;
+    } finally {
+        ytCookies.busy = false;
+    }
+}
+
+async function removeYouTubeCookies() {
+    try {
+        await fetch("./api/yt/cookies", { method: "DELETE" });
+    } catch (_) {}
+    ytCookies.signedIn = false;
+    renderYouTubeCookiesState();
+    setYouTubeCookiesStatus("Removed. Videos will play signed out.");
+}
+
+async function readCookieFile(file) {
+    if (!file) return;
+    if (file.size > 512 * 1024) {
+        setYouTubeCookiesStatus("That file is too big to be a cookie export.", "error");
+        return;
+    }
+    await submitYouTubeCookies(await file.text());
+}
+
+function initYouTubeCookiesDialog() {
+    const dialog = document.getElementById("yt-cookies-dialog");
+    if (!dialog) return;
+    const openBtn = document.getElementById("yt-cookies-open-btn");
+    if (openBtn) openBtn.addEventListener("click", () => openYouTubeCookiesDialog({ returnFocus: openBtn }));
+    dialog.addEventListener("cancel", (e) => {
+        e.preventDefault();
+        closeYouTubeCookiesDialog();
+    });
+    dialog.addEventListener("click", (e) => {
+        if (e.target === dialog) closeYouTubeCookiesDialog();
+    });
+    for (const id of ["yt-cookies-close-btn", "yt-cookies-done-btn"]) {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener("click", () => closeYouTubeCookiesDialog());
+    }
+    const remove = document.getElementById("yt-cookies-remove-btn");
+    if (remove) remove.addEventListener("click", () => removeYouTubeCookies());
+
+    // Paste anywhere in the dialog
+    dialog.addEventListener("paste", (e) => {
+        const text = e.clipboardData && e.clipboardData.getData("text");
+        if (!text) return;
+        e.preventDefault();
+        submitYouTubeCookies(text);
+    });
+
+    const drop = document.getElementById("yt-cookies-drop");
+    const file = document.getElementById("yt-cookies-file");
+    if (file) {
+        file.addEventListener("change", () => {
+            readCookieFile(file.files && file.files[0]);
+            file.value = "";
+        });
+    }
+    if (drop) {
+        drop.addEventListener("click", (e) => {
+            if (e.target && e.target.closest && e.target.closest(".yt-cookies-pick")) return;
+            drop.focus();
+            setYouTubeCookiesStatus("Now press Ctrl+V (⌘+V on Mac) to paste.");
+        });
+        drop.addEventListener("keydown", (e) => {
+            if ((e.key === "Enter" || e.key === " ") && file) {
+                e.preventDefault();
+                file.click();
+            }
+        });
+        for (const type of ["dragenter", "dragover"]) {
+            drop.addEventListener(type, (e) => {
+                e.preventDefault();
+                drop.classList.add("is-over");
+            });
+        }
+        drop.addEventListener("dragleave", () => drop.classList.remove("is-over"));
+        drop.addEventListener("drop", (e) => {
+            e.preventDefault();
+            drop.classList.remove("is-over");
+            const dt = e.dataTransfer;
+            if (dt && dt.files && dt.files.length) readCookieFile(dt.files[0]);
+            else if (dt) submitYouTubeCookies(dt.getData("text"));
+        });
+    }
+}
+
 function initYouTubeControls() {
+    initYouTubeCookiesDialog();
     const libBtn = document.getElementById("lib-youtube");
     if (libBtn) libBtn.addEventListener("click", () => openYouTubeDetail());
     const form = document.getElementById("yt-add-form");
