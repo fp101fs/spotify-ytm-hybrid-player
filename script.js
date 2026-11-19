@@ -10,6 +10,35 @@ let activeMixMode = "all";
 let isDrawerOpen = true;
 let activeDrawerTab = "up-next";
 const likedTrackIds = new Set();
+let activePlaybackTrackId = null;
+
+function getStorage() {
+    if (typeof window !== "undefined" && window.SpotTubeStorage) {
+        return window.SpotTubeStorage;
+    }
+    if (typeof globalThis !== "undefined" && globalThis.SpotTubeStorage) {
+        return globalThis.SpotTubeStorage;
+    }
+    return null;
+}
+
+function hydrateFromStorage() {
+    const store = getStorage();
+    if (!store) return;
+
+    likedTrackIds.clear();
+    for (const id of store.getLikedTrackIds()) {
+        likedTrackIds.add(id);
+    }
+
+    const likedCountEl = document.getElementById("lib-liked-count");
+    if (likedCountEl) {
+        likedCountEl.textContent =
+            likedTrackIds.size > 0
+                ? `Auto-playlist • ${likedTrackIds.size} liked`
+                : "Auto-playlist • Pin";
+    }
+}
 
 // Simple Navigation History Stack for Top Navbar Back/Forward Buttons
 const navHistory = [{ mood: "All", query: "", title: "Spotify Playlists" }];
@@ -34,6 +63,7 @@ function secondsToMinutesSeconds(seconds) {
  * only if `tracks.json` is unavailable.
  */
 async function getSongs() {
+    let baseTracks = [];
     try {
         const res = await fetch("./tracks.json");
         if (res.ok) {
@@ -41,54 +71,75 @@ async function getSongs() {
             const tracks = Array.isArray(manifest) ? manifest : (manifest.tracks || []);
             window.TRACK_CATALOG = manifest;
             if (tracks.length > 0) {
-                return tracks;
+                baseTracks = tracks.slice();
             }
         }
     } catch (err) {
         console.warn("Static tracks.json fetch failed, attempting relative /songs/ fallback:", err);
     }
 
-    // Fallback for unindexed local directory listing using relative path
-    const res = await fetch("./songs/");
-    const html = await res.text();
-    const div = document.createElement("div");
-    div.innerHTML = html;
-    const anchors = div.getElementsByTagName("a");
-    const fallbackTracks = [];
+    if (baseTracks.length === 0) {
+        // Fallback for unindexed local directory listing using relative path
+        const res = await fetch("./songs/");
+        const html = await res.text();
+        const div = document.createElement("div");
+        div.innerHTML = html;
+        const anchors = div.getElementsByTagName("a");
 
-    for (let i = 0; i < anchors.length; i++) {
-        const href = anchors[i].getAttribute("href") || "";
-        if (href.toLowerCase().endsWith(".mp3")) {
-            const rawFile = decodeURIComponent(href.split("/").pop());
-            const [rawTitle, rawArtistPart = "Unknown Artist"] = rawFile.replace(/\.mp3$/i, "").split("-");
-            const title = rawTitle.trim();
-            const artistDisplay = rawArtistPart.trim();
-            fallbackTracks.push({
-                id: `${title}-${artistDisplay}`.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
-                filename: rawFile,
-                title,
-                primaryArtist: artistDisplay.split(",")[0].trim(),
-                artists: artistDisplay.split(",").map((s) => s.trim()),
-                artistDisplay,
-                album: `${title} (Single)`,
-                year: 2024,
-                duration: 0,
-                durationFormatted: "0:00",
-                audioUrl: `songs/${encodeURIComponent(rawFile)}`,
-                coverUrl: `Images/${encodeURIComponent(title)}.jpeg`,
-                genre: "Pop",
-                language: "English",
-                moods: ["Chill"],
-                bpm: 110,
-                energy: 0.65,
-                valence: 0.6,
-                danceability: 0.65,
-                acousticness: 0.3,
-                popularity: 0.75,
-            });
+        for (let i = 0; i < anchors.length; i++) {
+            const href = anchors[i].getAttribute("href") || "";
+            if (href.toLowerCase().endsWith(".mp3")) {
+                const rawFile = decodeURIComponent(href.split("/").pop());
+                const [rawTitle, rawArtistPart = "Unknown Artist"] = rawFile.replace(/\.mp3$/i, "").split("-");
+                const title = rawTitle.trim();
+                const artistDisplay = rawArtistPart.trim();
+                baseTracks.push({
+                    id: `${title}-${artistDisplay}`.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+                    filename: rawFile,
+                    title,
+                    primaryArtist: artistDisplay.split(",")[0].trim(),
+                    artists: artistDisplay.split(",").map((s) => s.trim()),
+                    artistDisplay,
+                    album: `${title} (Single)`,
+                    year: 2024,
+                    duration: 0,
+                    durationFormatted: "0:00",
+                    audioUrl: `songs/${encodeURIComponent(rawFile)}`,
+                    coverUrl: `Images/${encodeURIComponent(title)}.jpeg`,
+                    genre: "Pop",
+                    language: "English",
+                    moods: ["Chill"],
+                    bpm: 110,
+                    energy: 0.65,
+                    valence: 0.6,
+                    danceability: 0.65,
+                    acousticness: 0.3,
+                    popularity: 0.75,
+                });
+            }
         }
     }
-    return fallbackTracks;
+
+    // Merge any IndexedDB user-imported local audio tracks
+    const store = getStorage();
+    if (store && typeof store.getImportedTracks === "function") {
+        try {
+            const imported = await store.getImportedTracks();
+            if (Array.isArray(imported) && imported.length > 0) {
+                const existingIds = new Set(baseTracks.map((t) => t.id));
+                for (const imp of imported) {
+                    if (!existingIds.has(imp.id)) {
+                        baseTracks.push(imp);
+                        existingIds.add(imp.id);
+                    }
+                }
+            }
+        } catch (err) {
+            console.warn("Failed to hydrate IndexedDB imported tracks:", err);
+        }
+    }
+
+    return baseTracks;
 }
 
 function resolveTrackIndex(trackOrIndex) {
@@ -154,18 +205,46 @@ function syncActiveTrackUI() {
 
 const playMusic = (trackOrIndex, pause = false) => {
     if (!songs || songs.length === 0) return;
-    currentTrackIndex = resolveTrackIndex(trackOrIndex);
-    const track = songs[currentTrackIndex];
+
+    const store = getStorage();
+    const prevTrack = songs.find((t) => t.id === activePlaybackTrackId);
+    const nextIndex = resolveTrackIndex(trackOrIndex);
+    const track = songs[nextIndex];
     if (!track) return;
 
+    // Record telemetry outcome (skip or completion) for previous active playback session
+    if (
+        store &&
+        prevTrack &&
+        activePlaybackTrackId &&
+        Number.isFinite(currentSong.currentTime) &&
+        currentSong.currentTime >= 0.75
+    ) {
+        const prevDuration =
+            Number.isFinite(currentSong.duration) && currentSong.duration > 0
+                ? currentSong.duration
+                : prevTrack.duration || 180;
+        store.recordPlaybackOutcome(prevTrack.id, {
+            listenedSeconds: currentSong.currentTime,
+            durationSeconds: prevDuration,
+            endedNaturally: false,
+        });
+    }
+
+    currentTrackIndex = nextIndex;
     currentSong.src = track.audioUrl;
     if (!pause) {
+        activePlaybackTrackId = track.id;
+        if (store) {
+            store.recordPlayStart(track.id);
+        }
         const playPromise = currentSong.play();
         if (playPromise && typeof playPromise.catch === "function") {
             playPromise.catch(() => {});
         }
         updatePlayButtonIcon(false);
     } else {
+        activePlaybackTrackId = null;
         updatePlayButtonIcon(true);
     }
 
@@ -485,16 +564,41 @@ function renderDrawerTrackInfo(track) {
     }
 
     if (featuresEl) {
+        const store = getStorage();
+        const effective = store ? store.getEffectiveAudioFeatures(track) : null;
+        const stats = store ? store.getTrackStats(track.id) : null;
+        const affinity = store ? store.computeTasteAffinity(track.id) : null;
+
         const metrics = [
-            { label: "Energy", value: Math.round((track.energy ?? 0.7) * 100) },
+            { label: "Energy", value: Math.round(((effective?.energy ?? track.energy) ?? 0.7) * 100) },
             { label: "Valence (Mood)", value: Math.round((track.valence ?? 0.65) * 100) },
             { label: "Danceability", value: Math.round((track.danceability ?? 0.7) * 100) },
             { label: "Acousticness", value: Math.round((track.acousticness ?? 0.25) * 100) },
-            { label: "Popularity", value: Math.round((track.popularity ?? 0.8) * 100) },
+            {
+                label: "Spectral Brightness",
+                value: Math.round(((effective?.spectralCentroidNormalized ?? track.energy) ?? 0.6) * 100),
+            },
+            {
+                label: "Taste Affinity",
+                value: Math.round(((affinity?.normalizedScore ?? track.popularity) ?? 0.75) * 100),
+            },
         ];
-        featuresEl.innerHTML = metrics
-            .map(
-                (m) => `
+
+        const telemetrySummary =
+            stats && stats.playCount > 0
+                ? `<div class="feature-row">
+                    <div class="feature-row-header">
+                        <span>Plays: ${stats.playCount} &bull; Avg Completion</span>
+                        <span>${Math.round(stats.avgCompletionRatio * 100)}%</span>
+                    </div>
+                </div>`
+                : "";
+
+        featuresEl.innerHTML =
+            telemetrySummary +
+            metrics
+                .map(
+                    (m) => `
             <div class="feature-row">
                 <div class="feature-row-header">
                     <span>${m.label}</span>
@@ -504,8 +608,8 @@ function renderDrawerTrackInfo(track) {
                     <div class="feature-bar-fill" style="width: ${m.value}%"></div>
                 </div>
             </div>`
-            )
-            .join("");
+                )
+                .join("");
     }
 }
 
@@ -744,7 +848,12 @@ function initShellControls() {
         likeBtn.addEventListener("click", () => {
             const track = songs[currentTrackIndex];
             if (!track) return;
-            if (likedTrackIds.has(track.id)) {
+            const store = getStorage();
+            if (store) {
+                const nowLiked = store.toggleLike(track.id);
+                if (nowLiked) likedTrackIds.add(track.id);
+                else likedTrackIds.delete(track.id);
+            } else if (likedTrackIds.has(track.id)) {
                 likedTrackIds.delete(track.id);
             } else {
                 likedTrackIds.add(track.id);
@@ -762,9 +871,17 @@ function initShellControls() {
 }
 
 async function main() {
+    hydrateFromStorage();
     songs = await getSongs();
     const songDiv = document.querySelector(".spotify-playlist");
     if (!songs.length || !songDiv) return;
+
+    const store = getStorage();
+    if (store && typeof store.attachAudioAnalyzer === "function") {
+        store.attachAudioAnalyzer(currentSong, {
+            getActiveTrackId: () => songs[currentTrackIndex]?.id || null,
+        });
+    }
 
     renderCatalogGrid();
     renderLibrarySidebar();
@@ -773,7 +890,12 @@ async function main() {
 
     const playBtn = document.getElementById("play");
     playBtn.addEventListener("click", () => {
+        const activeTrack = songs[currentTrackIndex];
         if (currentSong.paused) {
+            if (activeTrack) {
+                activePlaybackTrackId = activeTrack.id;
+                if (store) store.recordPlayStart(activeTrack.id);
+            }
             currentSong.play();
             updatePlayButtonIcon(false);
         } else {
@@ -826,8 +948,26 @@ async function main() {
     }
 
     currentSong.addEventListener("ended", () => {
+        const finishedTrack = songs[currentTrackIndex];
+        if (store && finishedTrack) {
+            const totalDuration =
+                Number.isFinite(currentSong.duration) && currentSong.duration > 0
+                    ? currentSong.duration
+                    : finishedTrack.duration || 180;
+            store.recordPlaybackOutcome(finishedTrack.id, {
+                listenedSeconds: totalDuration,
+                durationSeconds: totalDuration,
+                endedNaturally: true,
+            });
+            activePlaybackTrackId = null;
+        }
+
         if (isRepeat) {
             currentSong.currentTime = 0;
+            if (store && finishedTrack) {
+                activePlaybackTrackId = finishedTrack.id;
+                store.recordPlayStart(finishedTrack.id);
+            }
             currentSong.play();
         } else if (isShuffle) {
             const nextIndex = getRandomIndex(0, songs.length - 1, currentTrackIndex);
