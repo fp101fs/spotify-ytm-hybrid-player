@@ -16,7 +16,15 @@ A static-first music player that mixes Spotify's 3-pane layout, Daily Mixes and 
 - **Home dashboard**: Your Supermix, Daily Mix 1–3, On Repeat, Rediscover, Jump Back In.
 - **Artist, album and song pages** with top tracks, discography and "Similar in Your Library".
 - **Omni-search** over songs, artists, albums, genres and moods, with a Top Result card and "Start Search Mix".
-- **Bring your own music**: drag and drop files or folders (`.mp3`, `.flac`, `.wav`, `.m4a`, `.ogg`, …) or use the picker. Tags and cover art are read in the browser and the audio is stored in IndexedDB. Custom playlists and Liked Songs included.
+- **Bring your own music**: "+ Add Music" in the sidebar (or the "+" in Your Library, or the Home empty state) adds a folder or files (`.mp3`, `.flac`, `.wav`, `.m4a`, `.ogg`, …); drag and drop works anywhere. Custom playlists and Liked Songs included. See [Your own music](#your-own-music).
+
+## Your own music
+
+- **Instant import**: tracks show up straight away from their file names and can be played at once. Tags, duration and cover art fill in the background, reading only the bytes the tags need. A progress bar (and a pill above the playbar while you browse elsewhere) shows how far along it is, with Cancel; a summary toast lists any skipped or duplicate files.
+- **No-copy folders (Chrome/Edge)**: "Add a folder…" keeps a handle to the folder and stores only metadata, so audio plays straight from disk. After a reload, use **Reconnect folder** to grant access again and **Rescan** to pick up added or removed files.
+- **Copied imports (Safari, Firefox, drag and drop, "Add files…")**: the audio is copied into the browser's IndexedDB.
+- Local Files shows which mode each source uses. Everything stays on your device.
+- On phones the Add Music menu is a bottom sheet; "Add a folder…" is hidden where the browser can't pick folders.
 
 ## Run locally
 
