@@ -8,6 +8,7 @@
     <link rel="shortcut icon" href="favicon.ico" type="image/x-icon">
     <script src="storage.js" defer></script>
     <script src="recommender.js" defer></script>
+    <script src="queue.js" defer></script>
     <script src="script.js" defer></script>
 </head>
 <body>
@@ -357,8 +358,12 @@
                     <div class="drawer-section queue-section">
                         <div class="drawer-section-header">
                             <span>Next From Mix</span>
-                            <span class="drawer-sub-label" id="drawer-queue-summary">11 upcoming</span>
+                            <div class="drawer-queue-header-actions">
+                                <span class="drawer-sub-label" id="drawer-queue-summary">11 upcoming</span>
+                                <button type="button" class="queue-clear-manual-btn" id="clear-manual-queue-btn" hidden title="Clear manually queued tracks">Clear Manual</button>
+                            </div>
                         </div>
+                        <p id="queue-live-status" role="status" class="visually-hidden"></p>
                         <div class="queue-list" id="queue-list" role="list" aria-label="Upcoming tracks in queue"></div>
                     </div>
                 </div>

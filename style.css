@@ -1313,16 +1313,105 @@ hr {
     display: flex;
     flex-direction: column;
     gap: 6px;
+    position: relative;
+}
+
+.visually-hidden {
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
+.drawer-queue-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.queue-clear-manual-btn {
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background-color: rgba(255, 255, 255, 0.06);
+    color: var(--text-secondary);
+    font-size: 0.66rem;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: var(--radius-pill);
+    cursor: pointer;
+    text-transform: none;
+    letter-spacing: 0;
+    transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.queue-clear-manual-btn:hover {
+    background-color: rgba(255, 0, 51, 0.22);
+    color: #fff;
 }
 
 .queue-item {
     cursor: pointer;
-    transition: background-color 0.15s ease, border-color 0.15s ease;
+    transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+    position: relative;
 }
 
 .queue-item:hover {
     background-color: var(--bg-elevated-hover);
     border-color: var(--border-highlight);
+}
+
+.queue-item.manual-queue-item {
+    border-color: rgba(0, 210, 255, 0.38);
+    background-color: rgba(0, 210, 255, 0.07);
+}
+
+.queue-item.dragging {
+    opacity: 0.92;
+    transform: scale(1.02);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.55);
+    z-index: 5;
+    border-color: var(--accent-spotify);
+}
+
+.queue-item.drag-over-top {
+    border-block-start: 2px solid var(--accent-spotify);
+}
+
+.queue-item.drag-over-bottom {
+    border-block-end: 2px solid var(--accent-spotify);
+}
+
+.queue-drag-handle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    inline-size: 20px;
+    block-size: 28px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: grab;
+    flex-shrink: 0;
+    padding: 0;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+.queue-drag-handle:is(:hover, :focus-visible) {
+    color: var(--text-primary);
+    background-color: rgba(255, 255, 255, 0.08);
+}
+
+.queue-drag-handle:active {
+    cursor: grabbing;
+}
+
+.queue-drag-handle svg {
+    inline-size: 13px;
+    block-size: 13px;
 }
 
 .queue-item-cover {
@@ -1338,6 +1427,14 @@ hr {
     flex-direction: column;
     min-inline-size: 0;
     flex: 1 1 auto;
+    gap: 2px;
+}
+
+.queue-item-title-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-inline-size: 0;
 }
 
 .queue-item-title {
@@ -1349,18 +1446,177 @@ hr {
     text-overflow: ellipsis;
 }
 
+.queue-source-pill {
+    font-size: 0.58rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    padding: 1px 6px;
+    border-radius: var(--radius-pill);
+    background-color: rgba(0, 210, 255, 0.18);
+    color: #5ce1ff;
+    flex-shrink: 0;
+    text-transform: uppercase;
+}
+
+.queue-source-pill.play-next-pill {
+    background-color: rgba(30, 215, 96, 0.2);
+    color: var(--accent-spotify);
+}
+
 .queue-item-artist {
-    font-size: 0.74rem;
+    font-size: 0.73rem;
     color: var(--text-secondary);
     white-space: nowrap;
     overflow: clip;
     text-overflow: ellipsis;
 }
 
+.queue-item-right {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.queue-item-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.queue-action-btn {
+    inline-size: 24px;
+    block-size: 24px;
+    border-radius: 5px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0;
+    transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.queue-action-btn:hover:not(:disabled) {
+    background-color: rgba(255, 255, 255, 0.12);
+    color: var(--text-primary);
+}
+
+.queue-action-btn.remove-btn:hover:not(:disabled) {
+    background-color: rgba(255, 0, 51, 0.22);
+    color: #ff6b88;
+}
+
+.queue-action-btn:disabled {
+    opacity: 0.28;
+    cursor: default;
+}
+
+.queue-action-btn svg {
+    inline-size: 13px;
+    block-size: 13px;
+}
+
 .queue-item-duration {
-    font-size: 0.73rem;
+    font-size: 0.72rem;
     color: var(--text-muted);
     flex-shrink: 0;
+    min-inline-size: 28px;
+    text-align: right;
+}
+
+/* Card & Library Quick Queue / Mix Action Buttons */
+.card-quick-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-block-start: 8px;
+    padding-block-start: 7px;
+    border-block-start: 1px solid var(--border-subtle);
+}
+
+.card-action-btn {
+    flex: 1 1 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 4px 6px;
+    border-radius: 6px;
+    border: 1px solid var(--border-subtle);
+    background-color: rgba(255, 255, 255, 0.04);
+    color: var(--text-secondary);
+    font-size: 0.68rem;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.card-action-btn svg {
+    inline-size: 11px;
+    block-size: 11px;
+    flex-shrink: 0;
+}
+
+.card-action-btn:hover {
+    background-color: rgba(255, 255, 255, 0.12);
+    color: var(--text-primary);
+    border-color: var(--border-highlight);
+}
+
+.card-action-btn.mix-action-btn:hover {
+    background-color: rgba(30, 215, 96, 0.18);
+    color: var(--accent-spotify);
+    border-color: rgba(30, 215, 96, 0.45);
+}
+
+.lib-item-actions {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    flex-shrink: 0;
+    opacity: 0.75;
+    transition: opacity 0.15s ease;
+}
+
+.library-item:hover .lib-item-actions {
+    opacity: 1;
+}
+
+.lib-mini-btn {
+    inline-size: 24px;
+    block-size: 24px;
+    border-radius: 50%;
+    border: 1px solid var(--border-subtle);
+    background-color: rgba(255, 255, 255, 0.05);
+    color: var(--text-secondary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0;
+}
+
+.lib-mini-btn:hover {
+    background-color: var(--accent-spotify);
+    color: #000;
+    border-color: var(--accent-spotify);
+}
+
+.lib-mini-btn svg {
+    inline-size: 12px;
+    block-size: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    ::view-transition-group(*),
+    ::view-transition-old(*),
+    ::view-transition-new(*) {
+        animation: none;
+    }
 }
 
 /* Drawer Tab 2: Track Info & Audio Features */

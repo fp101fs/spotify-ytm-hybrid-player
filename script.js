@@ -32,6 +32,22 @@ function getRecommender() {
     return null;
 }
 
+function getQueueManager() {
+    if (typeof window !== "undefined" && window.SpotTubeQueue) {
+        return window.SpotTubeQueue;
+    }
+    if (typeof globalThis !== "undefined" && globalThis.SpotTubeQueue) {
+        return globalThis.SpotTubeQueue;
+    }
+    return null;
+}
+
+function announceQueueStatus(message) {
+    const statusEl = document.getElementById("queue-live-status");
+    if (!statusEl || !message) return;
+    statusEl.textContent = String(message);
+}
+
 function hydrateFromStorage() {
     const store = getStorage();
     if (!store) return;
@@ -213,10 +229,11 @@ function syncActiveTrackUI() {
     renderDrawerTrackInfo(track);
 }
 
-const playMusic = (trackOrIndex, pause = false) => {
+const playMusic = (trackOrIndex, pause = false, options = {}) => {
     if (!songs || songs.length === 0) return;
 
     const store = getStorage();
+    const qm = getQueueManager();
     const prevTrack = songs.find((t) => t.id === activePlaybackTrackId);
     const nextIndex = resolveTrackIndex(trackOrIndex);
     const track = songs[nextIndex];
@@ -242,6 +259,16 @@ const playMusic = (trackOrIndex, pause = false) => {
     }
 
     currentTrackIndex = nextIndex;
+
+    // Synchronize the live queue manager unless playMusic was invoked by startRadioMix or queue advance
+    if (qm && !options.skipQueueSync) {
+        qm.setCurrentTrack(track, {
+            catalog: songs,
+            preserveManual: true,
+            silent: true,
+        });
+    }
+
     currentSong.src = track.audioUrl;
     if (!pause) {
         activePlaybackTrackId = track.id;
@@ -272,6 +299,191 @@ const playMusic = (trackOrIndex, pause = false) => {
 
     syncActiveTrackUI();
 };
+
+/**
+ * Universal "Start Mix" Radio Generator entry point:
+ * Starts a nonstop radio mix from any single track, artist, album, mood chip,
+ * active search result set, or full-catalog Supermix.
+ */
+function startRadioMix(seedSpec = null, options = {}) {
+    if (!songs.length) return null;
+
+    const qm = getQueueManager();
+    if (options.openDrawer !== false) {
+        toggleRightDrawer(true);
+        switchDrawerTab("up-next");
+    }
+
+    if (qm && typeof qm.startMix === "function") {
+        const result = qm.startMix(seedSpec, {
+            catalog: songs,
+            mixMode: options.mixMode || activeMixMode,
+            moodFilter: options.moodFilter || activeMoodFilter,
+            keepCurrentTrack: Boolean(options.keepCurrentTrack),
+            preserveManual: Boolean(options.preserveManual),
+            startTrack: options.startTrack,
+        });
+
+        if (result.currentTrack) {
+            playMusic(result.currentTrack.id, Boolean(options.pause), {
+                skipQueueSync: true,
+            });
+        } else {
+            renderDrawerQueue();
+        }
+
+        if (result.mixSession) {
+            announceQueueStatus(
+                `Started ${result.mixSession.badge}: ${result.mixSession.label} (${result.queue.length} upcoming tracks)`
+            );
+        }
+        return result;
+    }
+
+    // Fallback when queue.js is not loaded
+    const filtered = getFilteredSongs();
+    const targetTrack =
+        (seedSpec && typeof seedSpec === "object" && seedSpec.id ? seedSpec : null) ||
+        (filtered.length > 0 ? filtered[0] : songs[currentTrackIndex]);
+    if (targetTrack) {
+        playMusic(targetTrack.id, Boolean(options.pause));
+    }
+    return {
+        currentTrack: targetTrack,
+        queue: getUpcomingQueueTracks(),
+    };
+}
+
+function playTrackNext(trackOrIndex, options = {}) {
+    if (!songs.length) return null;
+    const idx = resolveTrackIndex(trackOrIndex);
+    const track = songs[idx];
+    if (!track) return null;
+
+    const qm = getQueueManager();
+    if (!qm) return null;
+
+    ensureQueueCatalogSynced();
+    const entry = qm.playNext(track, options);
+    renderDrawerQueue();
+    announceQueueStatus(`Queued ${track.title} by ${track.primaryArtist} to Play Next`);
+    return entry;
+}
+
+function addTrackToQueue(trackOrIndex, options = {}) {
+    if (!songs.length) return null;
+    const idx = resolveTrackIndex(trackOrIndex);
+    const track = songs[idx];
+    if (!track) return null;
+
+    const qm = getQueueManager();
+    if (!qm) return null;
+
+    ensureQueueCatalogSynced();
+    const entry = qm.addToQueue(track, options);
+    renderDrawerQueue();
+    announceQueueStatus(`Added ${track.title} by ${track.primaryArtist} to Queue`);
+    return entry;
+}
+
+function removeTrackFromQueue(target) {
+    const qm = getQueueManager();
+    if (!qm) return null;
+
+    const removed = qm.removeFromQueue(target);
+    if (removed) {
+        renderDrawerQueue();
+        announceQueueStatus(`Removed ${removed.track?.title || "track"} from queue`);
+    }
+    return removed;
+}
+
+function reorderQueueItems(fromIndex, toIndex) {
+    const qm = getQueueManager();
+    if (!qm) return [];
+
+    const updated = qm.reorderQueue(fromIndex, toIndex);
+    renderDrawerQueue();
+    const movedTrack = updated[toIndex]?.track;
+    if (movedTrack) {
+        announceQueueStatus(
+            `Moved ${movedTrack.title} to position ${toIndex + 1} of ${updated.length} in queue`
+        );
+    }
+    return updated;
+}
+
+function moveQueueItemUp(target) {
+    const qm = getQueueManager();
+    if (!qm) return [];
+    const updated = qm.moveUp(target);
+    renderDrawerQueue();
+    return updated;
+}
+
+function moveQueueItemDown(target) {
+    const qm = getQueueManager();
+    if (!qm) return [];
+    const updated = qm.moveDown(target);
+    renderDrawerQueue();
+    return updated;
+}
+
+function playNextFromQueue(options = {}) {
+    if (!songs.length) return null;
+    const qm = getQueueManager();
+    if (qm) {
+        ensureQueueCatalogSynced();
+        const nextTrack = qm.advanceNext(options);
+        if (nextTrack) {
+            playMusic(nextTrack.id, Boolean(options.pause), { skipQueueSync: true });
+            return nextTrack;
+        }
+    }
+    const nextIndex = (currentTrackIndex + 1) % songs.length;
+    playMusic(nextIndex, Boolean(options.pause));
+    return songs[nextIndex];
+}
+
+function playPreviousFromQueue(options = {}) {
+    if (!songs.length) return null;
+    const qm = getQueueManager();
+    if (qm) {
+        ensureQueueCatalogSynced();
+        const prevTrack = qm.previous();
+        if (prevTrack) {
+            playMusic(prevTrack.id, Boolean(options.pause), { skipQueueSync: true });
+            return prevTrack;
+        }
+    }
+    const prevIndex = (currentTrackIndex - 1 + songs.length) % songs.length;
+    playMusic(prevIndex, Boolean(options.pause));
+    return songs[prevIndex];
+}
+
+function ensureQueueCatalogSynced() {
+    const qm = getQueueManager();
+    if (!qm || !songs.length) return;
+    const state = qm.getState();
+    const activeTrack = songs[currentTrackIndex] || songs[0];
+
+    if (!state.catalog || state.catalog.length !== songs.length) {
+        qm.setCatalog(songs, { rebuildQueue: false, silent: true });
+        qm.setCurrentTrack(activeTrack, {
+            catalog: songs,
+            regenerateMix: true,
+            recordHistory: false,
+            silent: true,
+        });
+    } else if (!state.currentTrack || state.currentTrack.id !== activeTrack.id) {
+        qm.setCurrentTrack(activeTrack, {
+            catalog: songs,
+            regenerateMix: true,
+            recordHistory: false,
+            silent: true,
+        });
+    }
+}
 
 function getFilteredSongs() {
     return songs.filter((track) => {
@@ -351,6 +563,17 @@ function renderCatalogGrid() {
                         <div class="card-badges">
                             <span class="card-badge-pill">${track.genre || "Pop"}</span>
                             <span>${track.durationFormatted || "0:00"}</span>
+                        </div>
+                        <div class="card-quick-actions" role="group" aria-label="Queue and Radio Mix actions for ${track.title}">
+                            <button type="button" class="card-action-btn" data-card-action="play-next" title="Play Next in Queue" aria-label="Play ${track.title} next">
+                                <span>Play Next</span>
+                            </button>
+                            <button type="button" class="card-action-btn" data-card-action="add-to-queue" title="Add to Queue" aria-label="Add ${track.title} to queue">
+                                <span>+ Queue</span>
+                            </button>
+                            <button type="button" class="card-action-btn mix-action-btn" data-card-action="start-mix" title="Start nonstop radio mix from ${track.title}" aria-label="Start radio mix from ${track.title}">
+                                <span>Mix</span>
+                            </button>
                         </div>`;
         card.querySelector("img").src = track.coverUrl;
         card.querySelector("h4").textContent = track.title;
@@ -360,6 +583,23 @@ function renderCatalogGrid() {
             e.stopPropagation();
             playMusic(fullIdx, false);
         });
+
+        if (typeof card.querySelectorAll === "function") {
+            card.querySelectorAll("[data-card-action]").forEach((actionBtn) => {
+                actionBtn.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    const action = actionBtn.dataset.cardAction;
+                    if (action === "play-next") {
+                        playTrackNext(track.id);
+                    } else if (action === "add-to-queue") {
+                        addTrackToQueue(track.id);
+                    } else if (action === "start-mix") {
+                        startRadioMix({ type: "track", track });
+                    }
+                });
+            });
+        }
+
         card.addEventListener("click", () => {
             playMusic(fullIdx, false);
         });
@@ -387,14 +627,15 @@ function renderLibrarySidebar() {
             const btn = document.createElement("button");
             btn.type = "button";
             btn.className = "library-item";
+            btn.dataset.artist = artistName;
             btn.innerHTML = `
                 <div class="lib-item-art"><img src="${sampleTrack.coverUrl}" alt="${artistName}"></div>
                 <div class="lib-item-meta">
                     <span class="lib-item-title">${artistName}</span>
-                    <span class="lib-item-sub">Artist &bull; ${sampleTrack.genre || "Music"}</span>
+                    <span class="lib-item-sub">Artist Radio &bull; ${sampleTrack.genre || "Music"}</span>
                 </div>`;
             btn.addEventListener("click", () => {
-                playMusic(sampleTrack.id, false);
+                startRadioMix({ type: "artist", artist: artistName });
             });
             nodes.push(btn);
         }
@@ -403,14 +644,15 @@ function renderLibrarySidebar() {
             const btn = document.createElement("button");
             btn.type = "button";
             btn.className = "library-item";
+            btn.dataset.album = track.album;
             btn.innerHTML = `
                 <div class="lib-item-art"><img src="${track.coverUrl}" alt="${track.album}"></div>
                 <div class="lib-item-meta">
                     <span class="lib-item-title">${track.album}</span>
-                    <span class="lib-item-sub">Album &bull; ${track.primaryArtist} (${track.year || 2024})</span>
+                    <span class="lib-item-sub">Album Radio &bull; ${track.primaryArtist} (${track.year || 2024})</span>
                 </div>`;
             btn.addEventListener("click", () => {
-                playMusic(track.id, false);
+                startRadioMix({ type: "album", album: track.album });
             });
             nodes.push(btn);
         }
@@ -421,6 +663,7 @@ function renderLibrarySidebar() {
             const btn = document.createElement("button");
             btn.type = "button";
             btn.className = "library-item";
+            btn.dataset.moodMix = mood;
             btn.innerHTML = `
                 <div class="lib-item-art"><img src="${match.coverUrl}" alt="${mood} Mix"></div>
                 <div class="lib-item-meta">
@@ -429,7 +672,7 @@ function renderLibrarySidebar() {
                 </div>`;
             btn.addEventListener("click", () => {
                 setMoodFilter(mood);
-                playMusic(match.id, false);
+                startRadioMix({ type: "mood", mood });
             });
             nodes.push(btn);
         }
@@ -462,13 +705,27 @@ function renderDrawerNowPlaying(track) {
     const container = document.getElementById("drawer-now-playing");
     const bpmBadge = document.getElementById("now-playing-bpm-badge");
     const seedLabel = document.getElementById("mix-seed-label");
+    const activeBadge = document.getElementById("mix-active-badge");
+    const autoplayPill = document.getElementById("mix-autoplay-pill");
     if (!container || !track) return;
+
+    const qm = getQueueManager();
+    const mixSession = qm && typeof qm.getMixSession === "function" ? qm.getMixSession() : null;
 
     if (bpmBadge) {
         bpmBadge.textContent = track.bpm ? `${track.bpm} BPM` : track.genre || "Pop";
     }
+    if (activeBadge && mixSession?.badge) {
+        activeBadge.textContent = mixSession.badge;
+    }
     if (seedLabel) {
-        seedLabel.textContent = `${track.title} • ${track.primaryArtist}`;
+        seedLabel.textContent =
+            mixSession?.label && mixSession.label !== "Catalog Supermix"
+                ? mixSession.label
+                : `${track.title} • ${track.primaryArtist}`;
+    }
+    if (autoplayPill && mixSession?.autoplayLabel) {
+        autoplayPill.textContent = mixSession.autoplayLabel;
     }
 
     container.innerHTML = `
@@ -484,10 +741,16 @@ function renderDrawerNowPlaying(track) {
 function getUpcomingQueueTracks() {
     if (!songs.length) return [];
 
+    const qm = getQueueManager();
+    if (qm && typeof qm.getUpcomingTracks === "function") {
+        ensureQueueCatalogSynced();
+        return qm.getUpcomingTracks();
+    }
+
     const recommender = getRecommender();
     const activeTrack = songs[currentTrackIndex] || songs[0];
 
-    // If SpotTubeRecommender is loaded, use the multi-signal hybrid recommendation engine
+    // If SpotTubeRecommender is loaded (and queue.js is not), use the multi-signal hybrid recommendation engine
     if (recommender && typeof recommender.recommendTracks === "function" && activeTrack) {
         const recommended = recommender.recommendTracks(songs, {
             seedTrack: activeTrack,
@@ -497,8 +760,6 @@ function getUpcomingQueueTracks() {
             includeSeedTracks: false,
         });
 
-        // For explicit sorting modes asserted by legacy shell checks ("upbeat", "chill", "deep-cuts"),
-        // ensure deterministic tie-breaking/monotonicity while preserving recommendation metadata.
         if (activeMixMode === "upbeat") {
             return recommended
                 .slice()
@@ -557,43 +818,173 @@ function getUpcomingQueueTracks() {
     return ordered;
 }
 
+let draggedQueueIndex = null;
+
 function renderDrawerQueue() {
     const queueList = document.getElementById("queue-list");
     const queueSummary = document.getElementById("drawer-queue-summary");
     const queueBadge = document.getElementById("queue-count-badge");
+    const clearManualBtn = document.getElementById("clear-manual-queue-btn");
     if (!queueList) return;
 
     const upcoming = getUpcomingQueueTracks();
+    const manualCount = upcoming.filter((t) => t.queueMeta?.source === "manual").length;
+
     if (queueSummary) {
-        queueSummary.textContent = `${upcoming.length} upcoming`;
+        queueSummary.textContent =
+            manualCount > 0
+                ? `${upcoming.length} upcoming (${manualCount} queued)`
+                : `${upcoming.length} upcoming`;
     }
     if (queueBadge) {
         queueBadge.textContent = String(upcoming.length);
     }
+    if (clearManualBtn) {
+        clearManualBtn.hidden = manualCount === 0;
+    }
 
-    const nodes = upcoming.map((track) => {
+    const nodes = upcoming.map((track, idx) => {
         const item = document.createElement("div");
-        item.className = "queue-item";
+        const isManual = track.queueMeta?.source === "manual";
+        const isPlayNext = track.queueMeta?.manualType === "play-next";
+        const queueId = track.queueMeta?.queueId || `q-idx-${idx}-${track.id}`;
+
+        item.className = isManual ? "queue-item manual-queue-item" : "queue-item";
         item.setAttribute("role", "listitem");
+        item.setAttribute("draggable", "true");
         item.dataset.trackId = track.id;
+        item.dataset.queueId = queueId;
+        item.dataset.queueIndex = String(idx);
+
         const reason = track.recommendation?.primaryReason;
         const scorePct =
-            typeof track.recommendation?.totalScore === "number"
+            typeof track.recommendation?.totalScore === "number" && !isManual
                 ? `${Math.round(track.recommendation.totalScore * 100)}% match`
                 : "";
         if (reason) {
             item.title = scorePct ? `${reason} • ${scorePct}` : reason;
         }
         const subText = reason ? `${track.artistDisplay} • ${reason}` : track.artistDisplay;
+        const sourcePillHtml = isManual
+            ? `<span class="queue-source-pill ${isPlayNext ? "play-next-pill" : ""}">${
+                  isPlayNext ? "NEXT" : "QUEUED"
+              }</span>`
+            : "";
+
         item.innerHTML = `
+            <button type="button" class="queue-drag-handle" aria-label="Reorder ${track.title} in queue" title="Drag or use arrows to reorder">
+                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M5 3.5a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5zm6 0a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5zM5 7a1.25 1.25 0 1 1 0 2.5A1.25 1.25 0 0 1 5 7zm6 0a1.25 1.25 0 1 1 0 2.5A1.25 1.25 0 0 1 11 7zm-6 3.5a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5zm6 0a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5z"/></svg>
+            </button>
             <img src="${track.coverUrl}" alt="${track.title}" class="queue-item-cover">
             <div class="queue-item-meta">
-                <span class="queue-item-title">${track.title}</span>
+                <div class="queue-item-title-row">
+                    <span class="queue-item-title">${track.title}</span>
+                    ${sourcePillHtml}
+                </div>
                 <span class="queue-item-artist">${subText}</span>
             </div>
-            <span class="queue-item-duration">${track.durationFormatted || "0:00"}</span>
+            <div class="queue-item-right">
+                <div class="queue-item-actions" role="group" aria-label="Queue actions for ${track.title}">
+                    <button type="button" class="queue-action-btn" data-queue-action="move-up" title="Move up" aria-label="Move ${track.title} up in queue" ${idx === 0 ? "disabled" : ""}>
+                        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 3.5 2.5 9l1.06 1.06L8 5.62l4.44 4.44L13.5 9 8 3.5z"/></svg>
+                    </button>
+                    <button type="button" class="queue-action-btn" data-queue-action="move-down" title="Move down" aria-label="Move ${track.title} down in queue" ${idx === upcoming.length - 1 ? "disabled" : ""}>
+                        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 12.5 2.5 7l1.06-1.06L8 10.38l4.44-4.44L13.5 7 8 12.5z"/></svg>
+                    </button>
+                    <button type="button" class="queue-action-btn" data-queue-action="play-next" title="Promote to Play Next" aria-label="Play ${track.title} next">
+                        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M2 3.75A.75.75 0 0 1 2.75 3h7.5a.75.75 0 0 1 0 1.5h-7.5A.75.75 0 0 1 2 3.75zm0 4A.75.75 0 0 1 2.75 7h5.5a.75.75 0 0 1 0 1.5h-5.5A.75.75 0 0 1 2 7.75zm9.5-.5v2.25H9.25a.75.75 0 0 0 0 1.5h2.25v2.25a.75.75 0 0 0 1.5 0V11h2.25a.75.75 0 0 0 0-1.5H13V7.25a.75.75 0 0 0-1.5 0z"/></svg>
+                    </button>
+                    <button type="button" class="queue-action-btn remove-btn" data-queue-action="remove" title="Remove from queue" aria-label="Remove ${track.title} from queue">
+                        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06z"/></svg>
+                    </button>
+                </div>
+                <span class="queue-item-duration">${track.durationFormatted || "0:00"}</span>
+            </div>
         `;
+
+        if (typeof item.querySelectorAll === "function") {
+            item.querySelectorAll("[data-queue-action]").forEach((btn) => {
+                btn.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    const action = btn.dataset.queueAction;
+                    const qm = getQueueManager();
+                    if (action === "move-up") {
+                        reorderQueueItems(idx, Math.max(0, idx - 1));
+                    } else if (action === "move-down") {
+                        reorderQueueItems(idx, Math.min(upcoming.length - 1, idx + 1));
+                    } else if (action === "play-next") {
+                        if (qm && typeof qm.promoteToPlayNext === "function") {
+                            qm.promoteToPlayNext(queueId);
+                            renderDrawerQueue();
+                            announceQueueStatus(`Promoted ${track.title} to Play Next`);
+                        } else {
+                            playTrackNext(track.id);
+                        }
+                    } else if (action === "remove") {
+                        removeTrackFromQueue(queueId);
+                    }
+                });
+            });
+        }
+
+        // Keyboard arrow reordering on drag handle
+        const dragHandle = item.querySelector(".queue-drag-handle");
+        if (dragHandle && typeof dragHandle.addEventListener === "function") {
+            dragHandle.addEventListener("click", (e) => e.stopPropagation());
+            dragHandle.addEventListener("keydown", (e) => {
+                if (e.key === "ArrowUp" && idx > 0) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    reorderQueueItems(idx, idx - 1);
+                } else if (e.key === "ArrowDown" && idx < upcoming.length - 1) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    reorderQueueItems(idx, idx + 1);
+                }
+            });
+        }
+
+        // HTML5 / Pointer Drag-and-Drop Reordering
+        item.addEventListener("dragstart", (e) => {
+            draggedQueueIndex = idx;
+            item.classList.add("dragging");
+            if (e.dataTransfer) {
+                e.dataTransfer.effectAllowed = "move";
+                e.dataTransfer.setData("text/plain", String(idx));
+            }
+        });
+        item.addEventListener("dragend", () => {
+            draggedQueueIndex = null;
+            item.classList.remove("dragging");
+        });
+        item.addEventListener("dragover", (e) => {
+            e.preventDefault();
+            if (e.dataTransfer) {
+                e.dataTransfer.dropEffect = "move";
+            }
+        });
+        item.addEventListener("drop", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const fromIdx =
+                draggedQueueIndex !== null
+                    ? draggedQueueIndex
+                    : Number(e.dataTransfer?.getData("text/plain"));
+            if (Number.isInteger(fromIdx) && fromIdx >= 0 && fromIdx !== idx) {
+                reorderQueueItems(fromIdx, idx);
+            }
+            draggedQueueIndex = null;
+        });
+
         item.addEventListener("click", () => {
+            const qm = getQueueManager();
+            if (qm && typeof qm.jumpToQueueItem === "function") {
+                const targetTrack = qm.jumpToQueueItem(queueId);
+                if (targetTrack) {
+                    playMusic(targetTrack.id, false, { skipQueueSync: true });
+                    return;
+                }
+            }
             playMusic(track.id, false);
         });
         return item;
@@ -698,8 +1089,13 @@ function setMoodFilter(mood) {
     document.querySelectorAll("#mood-chips-bar .mood-chip").forEach((chip) => {
         chip.classList.toggle("active", chip.dataset.mood === activeMoodFilter);
     });
+    const qm = getQueueManager();
+    if (qm && typeof qm.setMoodFilter === "function") {
+        qm.setMoodFilter(activeMoodFilter, { retune: true, silent: true });
+    }
     pushNavState();
     renderCatalogGrid();
+    renderDrawerQueue();
 }
 
 function toggleRightDrawer(forceState) {
@@ -837,9 +1233,7 @@ function initShellControls() {
     if (navSupermix) {
         navSupermix.addEventListener("click", (e) => {
             e.preventDefault();
-            toggleRightDrawer(true);
-            switchDrawerTab("up-next");
-            playMusic(currentTrackIndex, false);
+            startRadioMix({ type: "supermix" });
         });
     }
 
@@ -871,32 +1265,82 @@ function initShellControls() {
             document.querySelectorAll("#mix-tuning-chips .tuning-chip").forEach((c) => {
                 c.classList.toggle("active", c === chip);
             });
+            const qm = getQueueManager();
+            if (qm && typeof qm.setMixMode === "function") {
+                qm.setMixMode(activeMixMode, { silent: true });
+            }
             renderDrawerQueue();
+            announceQueueStatus(`Tuned upcoming radio mix to ${chip.textContent || activeMixMode} mode`);
         });
     });
 
-    // 8. Hero & Navbar Start Mix Buttons
-    const startMixTriggers = [
-        "hero-start-mix-btn",
-        "header-start-mix-btn",
-        "search-mix-btn",
-        "playbar-mix-btn",
-        "info-start-mix-btn",
-        "lib-supermix",
-    ];
-    for (const id of startMixTriggers) {
+    // 8. Universal Start Mix Triggers (Search Mix, Track Mix, Mood Mix, and Supermix)
+    const searchMixBtn = document.getElementById("search-mix-btn");
+    if (searchMixBtn) {
+        searchMixBtn.addEventListener("click", () => {
+            if (activeSearchQuery) {
+                startRadioMix({
+                    type: "search",
+                    query: activeSearchQuery,
+                    tracks: getFilteredSongs(),
+                });
+            } else if (activeMoodFilter && activeMoodFilter !== "All") {
+                startRadioMix({
+                    type: "mood",
+                    mood: activeMoodFilter,
+                });
+            } else {
+                startRadioMix({ type: "supermix" });
+            }
+        });
+    }
+
+    const trackMixTriggers = ["playbar-mix-btn", "info-start-mix-btn"];
+    for (const id of trackMixTriggers) {
         const el = document.getElementById(id);
         if (el) {
             el.addEventListener("click", () => {
-                const filtered = getFilteredSongs();
-                const targetTrack = filtered.length > 0 ? filtered[0] : songs[currentTrackIndex];
-                toggleRightDrawer(true);
-                switchDrawerTab("up-next");
-                if (targetTrack) {
-                    playMusic(targetTrack.id, false);
+                const activeTrack = songs[currentTrackIndex] || songs[0];
+                if (activeTrack) {
+                    startRadioMix({ type: "track", track: activeTrack });
                 }
             });
         }
+    }
+
+    const supermixTriggers = ["hero-start-mix-btn", "header-start-mix-btn", "lib-supermix"];
+    for (const id of supermixTriggers) {
+        const el = document.getElementById(id);
+        if (el) {
+            el.addEventListener("click", () => {
+                if (activeSearchQuery) {
+                    startRadioMix({
+                        type: "search",
+                        query: activeSearchQuery,
+                        tracks: getFilteredSongs(),
+                    });
+                } else if (activeMoodFilter && activeMoodFilter !== "All") {
+                    startRadioMix({
+                        type: "mood",
+                        mood: activeMoodFilter,
+                    });
+                } else {
+                    startRadioMix({ type: "supermix" });
+                }
+            });
+        }
+    }
+
+    const clearManualBtn = document.getElementById("clear-manual-queue-btn");
+    if (clearManualBtn) {
+        clearManualBtn.addEventListener("click", () => {
+            const qm = getQueueManager();
+            if (qm && typeof qm.clearQueue === "function") {
+                qm.clearQueue({ onlyManual: true });
+                renderDrawerQueue();
+                announceQueueStatus("Cleared manually queued tracks");
+            }
+        });
     }
 
     const heroShuffleBtn = document.getElementById("hero-shuffle-all-btn");
@@ -904,7 +1348,7 @@ function initShellControls() {
         heroShuffleBtn.addEventListener("click", () => {
             if (!songs.length) return;
             const randomIdx = Math.floor(Math.random() * songs.length);
-            playMusic(randomIdx, false);
+            startRadioMix({ type: "track", track: songs[randomIdx] });
         });
     }
 
@@ -947,6 +1391,11 @@ async function main() {
         store.attachAudioAnalyzer(currentSong, {
             getActiveTrackId: () => songs[currentTrackIndex]?.id || null,
         });
+    }
+
+    const qm = getQueueManager();
+    if (qm && typeof qm.setCatalog === "function") {
+        qm.setCatalog(songs, { rebuildQueue: true, silent: true });
     }
 
     renderCatalogGrid();
@@ -1004,15 +1453,6 @@ async function main() {
         }
     });
 
-    function getRandomIndex(min, max, excludedNumber) {
-        if (max <= min) return min;
-        let randomNum;
-        do {
-            randomNum = Math.floor(Math.random() * (max - min + 1)) + min;
-        } while (randomNum === excludedNumber);
-        return randomNum;
-    }
-
     currentSong.addEventListener("ended", () => {
         const finishedTrack = songs[currentTrackIndex];
         if (store && finishedTrack) {
@@ -1035,12 +1475,8 @@ async function main() {
                 store.recordPlayStart(finishedTrack.id);
             }
             currentSong.play();
-        } else if (isShuffle) {
-            const nextIndex = getRandomIndex(0, songs.length - 1, currentTrackIndex);
-            playMusic(nextIndex, false);
         } else {
-            const nextIndex = (currentTrackIndex + 1) % songs.length;
-            playMusic(nextIndex, false);
+            playNextFromQueue({ shuffle: isShuffle, repeat: false, pause: false });
         }
     });
 
@@ -1082,13 +1518,11 @@ async function main() {
     });
 
     document.getElementById("previous").addEventListener("click", () => {
-        const previousIndex = (currentTrackIndex - 1 + songs.length) % songs.length;
-        playMusic(previousIndex, currentSong.paused);
+        playPreviousFromQueue({ pause: currentSong.paused });
     });
 
     document.getElementById("next").addEventListener("click", () => {
-        const nextIndex = (currentTrackIndex + 1) % songs.length;
-        playMusic(nextIndex, currentSong.paused);
+        playNextFromQueue({ shuffle: isShuffle, pause: currentSong.paused });
     });
 
     const volumeBar = document.querySelector(".volume-bar");
@@ -1160,6 +1594,15 @@ window.SpotTubeShell = {
     resolveTrackIndex,
     getFilteredSongs,
     getUpcomingQueueTracks,
+    startRadioMix,
+    playTrackNext,
+    addTrackToQueue,
+    removeTrackFromQueue,
+    reorderQueueItems,
+    moveQueueItemUp,
+    moveQueueItemDown,
+    playNextFromQueue,
+    playPreviousFromQueue,
     setMoodFilter,
     toggleRightDrawer,
     switchDrawerTab,
@@ -1189,6 +1632,30 @@ window.SpotTubeShell = {
         if (typeof patch.activeMixMode === "string") activeMixMode = patch.activeMixMode;
         if (typeof patch.isDrawerOpen === "boolean") isDrawerOpen = patch.isDrawerOpen;
         if (typeof patch.activeDrawerTab === "string") activeDrawerTab = patch.activeDrawerTab;
+
+        const qm = getQueueManager();
+        if (qm && songs.length > 0) {
+            if (Array.isArray(patch.songs)) {
+                qm.setCatalog(songs, { rebuildQueue: false, silent: true });
+            }
+            if (typeof patch.activeMoodFilter === "string") {
+                qm.setMoodFilter(activeMoodFilter, { retune: false, silent: true });
+            }
+            if (typeof patch.currentTrackIndex === "number" || Array.isArray(patch.songs)) {
+                const track = songs[currentTrackIndex] || songs[0];
+                if (track) {
+                    qm.setCurrentTrack(track, {
+                        catalog: songs,
+                        regenerateMix: true,
+                        recordHistory: false,
+                        silent: true,
+                    });
+                }
+            }
+            if (typeof patch.activeMixMode === "string") {
+                qm.setMixMode(activeMixMode, { silent: true });
+            }
+        }
     },
 };
 

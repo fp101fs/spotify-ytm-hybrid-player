@@ -13,7 +13,7 @@ We are transforming `/Users/iandodge/Documents/Spotify-UI-Clone` from a static H
 - [x] 2. Modernize the 3-pane Spotify + YT Music hybrid shell (`index.html`, `style.css`): full-viewport responsive layout with Left Library Sidebar, Center Main View (with top search bar, navigation history, and YT Music mood/activity filter chips), collapsible Right "Up Next / Radio Mix / Track Info" Drawer, and enhanced bottom Playbar.
 - [x] 3. Build the persistent user taste, telemetry & IndexedDB store (`storage.js`): track play counts, completion ratios, skip penalties (early skip vs late skip), likes/dislikes, recently played timestamps, custom playlists, local user-imported audio blobs (via IndexedDB), and real-time Web Audio API analyzer features (RMS energy, bass/treble spectral centroid) cached per track.
 - [x] 4. Build the Hybrid Recommendation & Scoring Engine (`recommender.js`): combine artist/collaborator affinity, genre/album/era clustering, audio feature cosine similarity (energy, tempo, mood, spectral profile), Spotify-style user taste affinity (completion rate + likes - skip decay), and recency/variety anti-repetition penalties.
-- [ ] 5. Implement the universal "Start Mix" Radio Generator & Queue Manager (`queue.js`): allow starting a nonstop radio mix from any single track, artist, album, mood chip, or active search result set, maintaining a live queue with manual reorder, "Play Next", "Add to Queue", and removal.
+- [x] 5. Implement the universal "Start Mix" Radio Generator & Queue Manager (`queue.js`): allow starting a nonstop radio mix from any single track, artist, album, mood chip, or active search result set, maintaining a live queue with manual reorder, "Play Next", "Add to Queue", and removal.
 - [ ] 6. Add YT Music Dynamic Mix Tuning Chips inside the "Up Next / Mix" drawer: allow switching the active radio mix mode on the fly between *All*, *Familiar*, *Discover*, *Deep Cuts*, *Upbeat*, and *Chill*, dynamically re-ranking and regenerating upcoming auto-queued tracks without interrupting current playback.
 - [ ] 7. Implement Continuous Nonstop Playback & Gapless/Crossfade Audio Engine (`player.js`): dual-deck HTML5 Audio + Web Audio API crossfader (configurable 0–12s crossfade), automatic endless queue replenishment when fewer than 3 tracks remain, keyboard shortcuts, and MediaSession API integration.
 - [ ] 8. Build rich Artist, Album, and Song Detail Views with one-click "Start Mix" hero buttons: clicking any artist or album opens a dedicated header view showing top tracks, discography, "Similar in Your Library" recommendations, and a prominent "Start Mix" radio button.
@@ -152,3 +152,39 @@ We are transforming `/Users/iandodge/Documents/Spotify-UI-Clone` from a static H
   - Dynamic Mix Tuning Chips live queue re-ranking without interrupting playback is Item 6.
 - **Testing & verification**:
   - Added `tests/recommender.test.js` and ran `npm test` (`node --test tests/*.test.js`): all 20 tests across 4 test files pass.
+
+### 5. Universal "Start Mix" Radio Generator & Queue Manager (`queue.js`)
+- **Files created/updated**:
+  - `queue.js` (universal browser `window.SpotTubeQueue` + CommonJS `module.exports` radio generator and live queue manager)
+  - `index.html` (loaded `<script src="queue.js" defer></script>` after `recommender.js` and before `script.js`; added `#clear-manual-queue-btn` and `#queue-live-status` `role="status"` live announcement region in `#panel-up-next`)
+  - `style.css` (added styling for `.queue-drag-handle`, `.queue-item.manual-queue-item`, `.queue-source-pill`, `.queue-item-actions`, `.queue-action-btn`, `.card-quick-actions`, `.card-action-btn`, `.visually-hidden`, and reduced-motion view transition rules)
+  - `script.js` (integrated `window.SpotTubeQueue` across track cards, library items, mood chips, search mix button, hero/header/playbar/track-info mix buttons, playbar Next/Previous/ended handlers, and interactive Up Next queue controls)
+  - `tests/queue.test.js` (automated test suite verifying universal Start Mix across all 6 seed sources, Play Next, Add to Queue, manual reorder, moveUp/moveDown, promoteToPlayNext, removal, endless nonstop replenishment, playback history, and DOM shell integration)
+- **How it works & Key APIs for later steps (`window.SpotTubeQueue` & `window.SpotTubeShell`)**:
+  - **Queue Manager Factory & Default Singleton (`window.SpotTubeQueue`)**:
+    - `createQueueManager({ catalog, storage, recommender, mixMode, moodFilter, autoplay, minQueueSize })` creates an isolated queue manager instance; all methods are also exposed directly on the default `window.SpotTubeQueue` singleton.
+  - **Universal Radio Mix Generator (`startMix(seedSpec, options)`)**:
+    - Normalizes any seed via `normalizeMixSeed(catalog, seedSpec, options)` and starts an endless radio session (`mixSession: { id, type, badge, label, autoplayLabel, seedTracks, artist, album, mood, searchQuery, startedAt }`):
+      - Single Track (`{ type: "track", track | trackId }` or track object/ID) -> badge `"TRACK RADIO"`, label `"<Title> • <PrimaryArtist>"`
+      - Artist (`{ type: "artist", artist }`) -> badge `"ARTIST RADIO"`, label `"<Artist> Radio"`
+      - Album (`{ type: "album", album }`) -> badge `"ALBUM RADIO"`, label `"<Album> Radio"`
+      - Mood Chip (`{ type: "mood", mood }`) -> badge `"MOOD MIX"`, label `"<Mood> Vibe Radio"`
+      - Active Search Result Set (`{ type: "search", query, tracks }`) -> badge `"SEARCH MIX"`, label `'Search Mix: "<Query>"'`
+      - Catalog Supermix (`{ type: "supermix" }` or `"supermix"`) -> badge `"SUPERMIX"`, label `"Your Nonstop Supermix"` (seeded by user's liked/high-affinity tracks)
+    - Selects the highest-affinity lead track (`currentTrack`) unless `options.keepCurrentTrack: true` is passed, and populates the upcoming radio queue using `SpotTubeRecommender.recommendTracks`.
+  - **Live Queue Operations**:
+    - Each queue entry has shape `{ queueId, trackId, track, source: "manual" | "mix", manualType: "play-next" | "add-to-queue" | null, userReordered, addedAt, recommendation }` and attaches `track.queueMeta` on `getUpcomingTracks()`.
+    - `playNext(trackOrId)` -> inserts at index `0` (`source: "manual"`, `manualType: "play-next"`), deduplicating any auto-mix copy of that track.
+    - `addToQueue(trackOrId)` -> appends to the manual priority block (FIFO after existing `"manual"` items, ahead of auto-generated `"mix"` items).
+    - `removeFromQueue(queueIdOrIndexOrTrackId)` -> removes the target entry and auto-replenishes if queue drops below `minQueueSize` (`3`).
+    - `reorderQueue(fromIndex, toIndex)` / `moveUp(target)` / `moveDown(target)` / `promoteToPlayNext(target)` -> reorders queue items in place and flags `userReordered: true`.
+    - `clearQueue({ onlyManual })` -> clears all upcoming items or only manually queued items.
+    - `advanceNext({ shuffle, repeat })` / `previous()` / `jumpToQueueItem(target)` -> advances playback respecting manual queue priority first, records `history` stack for `previous()`, and calls `replenishQueue()` automatically when fewer than `minQueueSize` (`3`) tracks remain so radio playback is nonstop.
+    - `setMixMode(mixMode)` -> re-ranks upcoming `"mix"` tracks for the selected YT Music mode while keeping `"manual"` items at the front without interrupting `currentTrack`.
+  - **Shell Helper Methods (`window.SpotTubeShell`)**:
+    - Added `startRadioMix(seedSpec, options)`, `playTrackNext(trackOrId)`, `addTrackToQueue(trackOrId)`, `removeTrackFromQueue(target)`, `reorderQueueItems(fromIndex, toIndex)`, `moveQueueItemUp(target)`, `moveQueueItemDown(target)`, `playNextFromQueue(options)`, and `playPreviousFromQueue(options)`.
+- **Deferred / Not done yet**:
+  - Enhanced YT Music Dynamic Mix Tuning Chips UI polish & mode indicators inside the "Up Next / Mix" drawer is Item 6.
+  - Dual-deck HTML5 Audio + Web Audio API crossfader (`player.js`) is Item 7.
+- **Testing & verification**:
+  - Added `tests/queue.test.js` and ran `npm test` (`node --test tests/*.test.js`): all 24 tests across 5 test files pass.
