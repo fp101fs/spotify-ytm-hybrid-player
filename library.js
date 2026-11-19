@@ -815,6 +815,17 @@
             popularity: 0.5,
         };
 
+        // Item 15: where each value came from, so online lookup only fills what the file didn't have
+        const tagArtist = splitArtistList(tags.artist).length || splitArtistList(tags.albumArtist).length;
+        const tagSources = {
+            title: sanitizeTagText(tags.title) ? "tag" : "filename",
+            artist: tagArtist ? "tag" : fromName.artists.length ? "filename" : "missing",
+            album: sanitizeTagText(tags.album) ? "tag" : fromName.album ? "folder" : "missing",
+            year: parseYear(tags.year) ? "tag" : "missing",
+            genre: genreRaw ? "tag" : "inferred",
+            cover: coverUrl.startsWith("data:image/svg") ? "generated" : "embedded",
+        };
+
         return {
             id,
             filename: sanitizeTagText(fileInfo.name, 240) || `${title}.${ext || "mp3"}`,
@@ -841,6 +852,7 @@
             moods,
             ...audioFeatures,
             audioFeatures,
+            tagSources,
             isLocalImport: true,
         };
     }

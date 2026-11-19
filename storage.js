@@ -14,7 +14,7 @@
 })(typeof globalThis !== "undefined" ? globalThis : typeof window !== "undefined" ? window : this, function (globalScope) {
     const STORAGE_KEY = "spottube_hybrid_store_v1";
     const IDB_NAME = "SpotTubeHybridDB";
-    const IDB_VERSION = 2; // v2 (item 14): folderSources store for no-copy linked folders
+    const IDB_VERSION = 3; // v2 (item 14): folderSources store; v3 (item 15): metadataLookups cache
     const MAX_RECENT_HISTORY = 100;
     const MAX_TRACK_PLAY_TIMESTAMPS = 25;
 
@@ -196,6 +196,7 @@
             importedTracks: new Map(),
             analyzerCache: new Map(),
             folderSources: new Map(),
+            metadataLookups: new Map(),
         };
 
         const objectUrlCache = new Map();
@@ -740,6 +741,9 @@
                         if (!db.objectStoreNames.contains("folderSources")) {
                             db.createObjectStore("folderSources", { keyPath: "id" });
                         }
+                        if (!db.objectStoreNames.contains("metadataLookups")) {
+                            db.createObjectStore("metadataLookups", { keyPath: "trackId" });
+                        }
                     };
                     req.onsuccess = () => {
                         const db = req.result;
@@ -758,7 +762,7 @@
         }
 
         async function idbPut(storeName, record) {
-            const key = storeName === "analyzerCache" ? record.trackId : record.id;
+            const key = storeName === "analyzerCache" || storeName === "metadataLookups" ? record.trackId : record.id;
             memoryIdb[storeName].set(String(key), record);
 
             const db = await openDatabase();
@@ -947,6 +951,9 @@
                 relativePath: isLinked ? String(trackMeta.relativePath || trackMeta.filename || "") : undefined,
                 importKey: trackMeta.importKey || undefined,
                 lastModified: Number(trackMeta.lastModified) || undefined,
+                // Item 15: where each field came from (tag / filename / online…) and the applied online match
+                tagSources: trackMeta.tagSources && typeof trackMeta.tagSources === "object" ? { ...trackMeta.tagSources } : undefined,
+                onlineMatch: trackMeta.onlineMatch && typeof trackMeta.onlineMatch === "object" ? { ...trackMeta.onlineMatch } : undefined,
                 isLocalImport: true,
                 createdAt: trackMeta.createdAt || now,
                 updatedAt: now,
@@ -1002,8 +1009,50 @@
             }
             await idbDelete("importedTracks", id);
             await idbDelete("audioBlobs", id);
+            await idbDelete("metadataLookups", id);
             forgetLinkedTrackUrls([id]);
             emitChange("idb:track-deleted", { trackId: id });
+            return true;
+        }
+
+        // ==================== ITEM 15: METADATA LOOKUP ====================
+
+        const EDITABLE_TRACK_FIELDS = [
+            "title", "primaryArtist", "featuredArtists", "artists", "artistDisplay", "album", "year", "genre",
+            "coverUrl", "hasEmbeddedCover", "tagSources", "onlineMatch",
+        ];
+
+        /** Merges metadata edits (e.g. an accepted online match) into a saved import. Audio is untouched. */
+        async function updateImportedTrack(trackId, patch = {}) {
+            if (!trackId) return null;
+            const id = String(trackId);
+            const existing = await idbGet("importedTracks", id);
+            if (!existing) return null;
+            const next = { ...existing };
+            for (const key of EDITABLE_TRACK_FIELDS) {
+                if (patch[key] !== undefined) next[key] = patch[key];
+            }
+            // Never persist a page-only blob: URL as a cover
+            if (typeof next.coverUrl === "string" && next.coverUrl.startsWith("blob:")) next.coverUrl = existing.coverUrl;
+            next.updatedAt = Date.now();
+            await idbPut("importedTracks", next);
+            emitChange("idb:track-updated", { track: next });
+            return next;
+        }
+
+        async function getMetadataLookup(trackId) {
+            if (!trackId) return null;
+            return idbGet("metadataLookups", String(trackId));
+        }
+
+        async function saveMetadataLookup(record = {}) {
+            if (!record || !record.trackId) return null;
+            return idbPut("metadataLookups", { ...record, trackId: String(record.trackId) });
+        }
+
+        async function deleteMetadataLookup(trackId) {
+            if (!trackId) return false;
+            await idbDelete("metadataLookups", String(trackId));
             return true;
         }
 
@@ -1454,6 +1503,11 @@
             getAudioBlob,
             getImportedTracks,
             deleteImportedTrack,
+            // Online metadata lookup (item 15)
+            updateImportedTrack,
+            getMetadataLookup,
+            saveMetadataLookup,
+            deleteMetadataLookup,
             // No-copy linked folders (item 14)
             saveFolderSource,
             getFolderSources,

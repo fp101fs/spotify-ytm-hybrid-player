@@ -6208,6 +6208,13 @@ function syncVolumeBarUI(vol, muted) {
 }
 
 function handleShellKeyDown(event) {
+    // Item 15: inside an open dialog (settings, match review, playlists…) Space/Enter work the focused control
+    // and Esc closes that dialog only, so player shortcuts stay out of the way
+    const target = event && event.target;
+    if (target && typeof target.closest === "function") {
+        const dialog = target.closest("dialog[open]");
+        if (dialog && dialog.id !== "shortcuts-modal") return { handled: false, reason: "dialog" };
+    }
     const pe = getPlayerEngine();
     const callbacks = {
         onTogglePlay: () => togglePlayPause(),
@@ -7195,6 +7202,10 @@ async function importLocalAudioFiles(fileInputs, options = {}) {
     });
     // The toast (role="status") announces the finish; the import live region only did start + quarters
     importLastQuarter = 0;
+    // Item 15: with online lookup on, new songs with missing info are looked up in the background
+    if (result.imported.length && isOnlineLookupEnabled() && options.autoLookup !== false) {
+        lookUpMissingInfo({ trackIds: result.imported.map((t) => t.id), background: true });
+    }
     return { ...result, added: result.imported, summary };
 }
 
@@ -7561,6 +7572,7 @@ function renderDetailCollectionChrome(detailData) {
     if (discographySection) discographySection.hidden = isCollection;
     updateImportProgressUi();
     renderLocalSourcesPanel();
+    updateLookupUi();
     if (similarSection) similarSection.hidden = isCollection && !(detailData.similarTracks || []).length;
 }
 
@@ -7577,6 +7589,9 @@ function buildCollectionRowActionsHtml(track, idx, collection) {
     }
     if (collection.type === "local" && track.isLocalImport) {
         return `
+            <button type="button" class="detail-row-btn" data-detail-track-action="fix-metadata" title="Look up song info for ${title} online" aria-label="Fix info for ${title}">
+                <span>Fix info</span>
+            </button>
             <button type="button" class="detail-row-btn danger-btn" data-detail-track-action="remove-import" title="Delete ${title} from this browser">
                 <span>Delete</span>
             </button>`;
@@ -7606,6 +7621,11 @@ function handleCollectionRowAction(action, track, idx, collection) {
     }
     if (action === "remove-import") {
         removeImportedTrack(track.id);
+        return true;
+    }
+    if (action === "fix-metadata") {
+        const active = typeof document !== "undefined" ? document.activeElement : null;
+        fixTrackMetadata(track.id, { returnFocus: active });
         return true;
     }
     return false;
@@ -7754,6 +7774,7 @@ function setDropOverlayVisible(visible) {
 
 function initLibraryImportControls() {
     initFolderSourceControls();
+    initMetadataLookupControls();
     const fileInput = document.getElementById("import-file-input");
     const folderInput = document.getElementById("import-folder-input");
     const onInputChange = (e) => {
@@ -8829,7 +8850,584 @@ function initFolderSourceControls() {
     }
 }
 
+// ==================== Item 15: optional online metadata lookup ====================
+// Off by default. When the user turns it on in Settings, songs with missing info (no artist/album, title from
+// the file name, generated cover) are looked up on MusicBrainz + iTunes (keyless). Confident matches fill in only
+// the missing fields; everything else waits in the "Suggested match" review dialog for Accept / Skip.
+
+let metadataLookupClient = null;
+let lookupRun = null;
+let lookupReviewQueue = [];
+let lookupReview = { open: false, index: 0, items: [], returnFocus: null, overwrite: false, single: false };
+let settingsDialogState = { returnFocus: null, pendingAction: null };
+
+function getMetadataLookupModule() {
+    return (typeof window !== "undefined" && window.SpotTubeMetadataLookup) || null;
+}
+
+function isOnlineLookupEnabled() {
+    const store = getStorage();
+    const prefs = store && typeof store.getPreferences === "function" ? store.getPreferences() : {};
+    return prefs.onlineLookup === true;
+}
+
+function setOnlineLookupEnabled(on) {
+    const store = getStorage();
+    if (store && typeof store.setPreferences === "function") store.setPreferences({ onlineLookup: Boolean(on) });
+    const toggle = document.getElementById("setting-online-lookup");
+    if (toggle) {
+        toggle.checked = Boolean(on);
+        toggle.setAttribute("aria-checked", String(Boolean(on)));
+    }
+    const state = document.getElementById("setting-online-lookup-state");
+    if (state) state.textContent = on ? "On" : "Off";
+    if (!on && lookupRun) cancelMetadataLookup();
+    updateLookupUi();
+    return Boolean(on);
+}
+
+/** Tests (and the browser playtest) can swap in a client; normally one is built on first use. */
+function setMetadataLookupClient(client) {
+    metadataLookupClient = client || null;
+}
+
+function getMetadataLookupClient() {
+    if (metadataLookupClient) return metadataLookupClient;
+    const M = getMetadataLookupModule();
+    if (!M) return null;
+    const store = getStorage();
+    const cache =
+        store && typeof store.getMetadataLookup === "function"
+            ? { get: (id) => store.getMetadataLookup(id), set: (rec) => store.saveMetadataLookup(rec) }
+            : null;
+    metadataLookupClient = M.createLookupClient({ cache });
+    return metadataLookupClient;
+}
+
+function getLookupTargets(trackIds) {
+    const M = getMetadataLookupModule();
+    if (!M) return [];
+    const wanted = Array.isArray(trackIds) ? new Set(trackIds.map(String)) : null;
+    return getImportedLocalTracks().filter((t) => (!wanted || wanted.has(String(t.id))) && M.needsLookup(t));
+}
+
+/** Applies a suggestion's chosen changes to the in-memory track and the saved import. */
+async function applyLookupChanges(track, suggestion, changes, meta = {}) {
+    const M = getMetadataLookupModule();
+    if (!M || !track || !changes.length) return null;
+    const patch = M.buildPatch(track, suggestion, changes, { auto: Boolean(meta.auto) });
+    Object.assign(track, patch);
+    if (patch.coverUrl) delete track.coverDataUrl;
+    const store = getStorage();
+    if (store && typeof store.updateImportedTrack === "function") {
+        try {
+            await store.updateImportedTrack(track.id, patch);
+        } catch (_) {}
+    }
+    await recordLookupDecision(track.id, "accepted");
+    queueImportRowUpdate(track);
+    return patch;
+}
+
+async function recordLookupDecision(trackId, decision) {
+    const store = getStorage();
+    if (!store || typeof store.getMetadataLookup !== "function") return;
+    try {
+        const rec = await store.getMetadataLookup(trackId);
+        if (rec) await store.saveMetadataLookup({ ...rec, decision, decidedAt: Date.now() });
+    } catch (_) {}
+}
+
+/**
+ * "Look up missing info" for Local Files (or the given trackIds). One request per second to MusicBrainz, run in
+ * the background; progress shows in the Local Files header and is announced politely at the start, halfway and
+ * the end (the finish is the role="status" toast), never per track.
+ */
+async function lookUpMissingInfo(options = {}) {
+    const M = getMetadataLookupModule();
+    if (!M) return null;
+    if (!isOnlineLookupEnabled()) {
+        if (options.background) return null;
+        openSettingsDialog({ reason: "lookup", returnFocus: options.returnFocus, pendingAction: () => lookUpMissingInfo(options) });
+        return null;
+    }
+    if (lookupRun) {
+        if (Array.isArray(options.trackIds)) for (const id of options.trackIds) lookupRun.extraIds.add(String(id));
+        return lookupRun.promise;
+    }
+    const client = getMetadataLookupClient();
+    const targets = getLookupTargets(options.trackIds);
+    if (!client || !targets.length) {
+        if (!options.background) showLibraryToast("Every song already has its info. Nothing to look up.");
+        return { counts: { applied: 0, suggested: 0, none: 0, errors: 0 }, total: 0, summary: "Nothing new to look up" };
+    }
+
+    const run = {
+        total: targets.length,
+        done: 0,
+        cancelled: false,
+        halfAnnounced: false,
+        extraIds: new Set(),
+        counts: { applied: 0, suggested: 0, none: 0, errors: 0, cancelled: false },
+        promise: null,
+    };
+    lookupRun = run;
+    announceImport(`Looking up info for ${run.total} ${run.total === 1 ? "song" : "songs"} online…`);
+    updateLookupUi();
+
+    run.promise = (async () => {
+        const queue = targets.slice();
+        const seen = new Set(queue.map((t) => t.id));
+        while (queue.length && !run.cancelled) {
+            const track = queue.shift();
+            await lookUpOneTrack(client, track, run);
+            run.done++;
+            if (!run.halfAnnounced && run.total > 3 && run.done >= run.total / 2 && run.done < run.total) {
+                run.halfAnnounced = true;
+                announceImport(`Looked up ${run.done} of ${run.total} songs`);
+            }
+            // Songs imported while this run was going join the end of it
+            if (run.extraIds.size) {
+                for (const t of getLookupTargets(Array.from(run.extraIds))) {
+                    if (!seen.has(t.id)) {
+                        seen.add(t.id);
+                        queue.push(t);
+                        run.total++;
+                    }
+                }
+                run.extraIds.clear();
+            }
+            updateLookupUi();
+        }
+        run.counts.cancelled = run.cancelled;
+        lookupRun = null;
+        flushImportUpdates({ force: true });
+        if (run.counts.applied) refreshLibraryViews();
+        else refreshActiveCollectionView();
+        updateLookupUi();
+        const summary = M.summarizeLookup(run.counts);
+        const reviewable = lookupReviewQueue.length;
+        showLibraryToast(summary, {
+            error: run.counts.errors > 0 && !run.counts.applied && !run.counts.suggested,
+            action: reviewable ? { label: "Review suggestions", onClick: () => openMatchReviewDialog() } : null,
+        });
+        return { counts: run.counts, total: run.total, summary };
+    })();
+    return run.promise;
+}
+
+async function lookUpOneTrack(client, track, run) {
+    const M = getMetadataLookupModule();
+    let result;
+    try {
+        result = await client.lookupTrack(track);
+    } catch (err) {
+        result = { status: "error", error: String((err && err.message) || err) };
+    }
+    if (!result || result.status === "error") {
+        run.counts.errors++;
+        return;
+    }
+    if (result.status === "none" || !result.suggestion || result.decision === "skipped") {
+        run.counts.none++;
+        return;
+    }
+    const changes = M.computeChanges(track, result.suggestion);
+    if (!changes.length) {
+        run.counts.none++;
+        return;
+    }
+    if (result.status === "confident") {
+        await applyLookupChanges(track, result.suggestion, changes, { auto: true });
+        run.counts.applied++;
+        return;
+    }
+    if (!lookupReviewQueue.some((item) => item.trackId === track.id)) {
+        lookupReviewQueue.push({ trackId: track.id, suggestion: result.suggestion });
+    }
+    run.counts.suggested++;
+}
+
+function cancelMetadataLookup() {
+    if (!lookupRun) return false;
+    lookupRun.cancelled = true;
+    announceImport("Stopping the lookup…");
+    return true;
+}
+
+/** "Fix info" on one song: always asks the services again and shows the result for review. */
+async function fixTrackMetadata(trackId, options = {}) {
+    const M = getMetadataLookupModule();
+    const track = songs.find((t) => t.id === trackId);
+    if (!M || !track) return null;
+    if (!isOnlineLookupEnabled()) {
+        openSettingsDialog({ reason: "fix", returnFocus: options.returnFocus, pendingAction: () => fixTrackMetadata(trackId, options) });
+        return null;
+    }
+    const client = getMetadataLookupClient();
+    if (!client) return null;
+    announceImport(`Looking up “${track.title}” online…`);
+    let result;
+    try {
+        result = await client.lookupTrack(track, { force: true });
+    } catch (err) {
+        result = { status: "error" };
+    }
+    if (!result || result.status === "error") {
+        showLibraryToast(`Couldn't reach the music info services. Check your connection and try again.`, {
+            error: true,
+            action: { label: "Try again", onClick: () => fixTrackMetadata(trackId, options) },
+        });
+        return result;
+    }
+    if (result.status === "none" || !result.suggestion) {
+        showLibraryToast(`No match found online for “${track.title}”.`);
+        return result;
+    }
+    const changes = M.computeChanges(track, result.suggestion, { overwriteTags: true });
+    if (!changes.length) {
+        showLibraryToast(`“${track.title}” already matches what MusicBrainz and iTunes have.`);
+        return result;
+    }
+    openMatchReviewDialog({ items: [{ trackId, suggestion: result.suggestion }], single: true, returnFocus: options.returnFocus });
+    return result;
+}
+
+// ---------- Local Files header: button, progress, review shortcut ----------
+
+function updateLookupUi() {
+    const onLocalFiles = activeView === "detail" && activeDetail && activeDetail.type === "local";
+    const hasImports = getImportedLocalTracks().length > 0;
+    const btn = document.getElementById("detail-lookup-btn");
+    if (btn) {
+        btn.hidden = !(onLocalFiles && hasImports);
+        // Stays focusable while a run is going (focus often sits here); a second click just joins that run
+        btn.setAttribute("aria-disabled", String(Boolean(lookupRun)));
+    }
+    const reviewBtn = document.getElementById("detail-review-matches-btn");
+    if (reviewBtn) {
+        const n = lookupReviewQueue.length;
+        reviewBtn.hidden = !(onLocalFiles && n > 0);
+        reviewBtn.textContent = `Review suggestions (${n})`;
+    }
+    const progress = document.getElementById("lookup-progress");
+    if (progress) progress.hidden = !(lookupRun && onLocalFiles);
+    const label = document.getElementById("lookup-progress-label");
+    if (label) label.textContent = lookupRun ? `Looking up missing info · ${lookupRun.done} of ${lookupRun.total}` : "";
+    const bar = document.getElementById("lookup-progress-bar");
+    if (bar) {
+        const total = lookupRun ? lookupRun.total : 1;
+        const done = lookupRun ? lookupRun.done : 0;
+        bar.setAttribute("aria-valuemin", "0");
+        bar.setAttribute("aria-valuemax", String(Math.max(total, 1)));
+        bar.setAttribute("aria-valuenow", String(done));
+        bar.setAttribute("aria-valuetext", `${done} of ${total} songs`);
+        const fill = bar.querySelector ? bar.querySelector(".import-progress-fill") : null;
+        if (fill && fill.style) fill.style.width = `${total ? Math.round((done / total) * 100) : 0}%`;
+    }
+}
+
+// ---------- Settings dialog ----------
+
+function openSettingsDialog(options = {}) {
+    const dialog = document.getElementById("settings-dialog");
+    if (!dialog) return false;
+    const active = document.activeElement;
+    settingsDialogState = {
+        returnFocus: options.returnFocus || (active && active !== document.body ? active : document.getElementById("settings-btn")),
+        pendingAction: typeof options.pendingAction === "function" ? options.pendingAction : null,
+    };
+    const note = document.getElementById("settings-lookup-note");
+    if (note) {
+        note.hidden = !options.reason;
+        note.textContent = options.reason ? "Online lookup is off. Turn it on to look up song info, then close Settings to continue." : "";
+    }
+    setOnlineLookupEnabled(isOnlineLookupEnabled());
+    setDialogOpen(dialog, true);
+    const toggle = document.getElementById("setting-online-lookup");
+    if (toggle && typeof toggle.focus === "function") toggle.focus();
+    return true;
+}
+
+function closeSettingsDialog() {
+    const dialog = document.getElementById("settings-dialog");
+    if (!dialog || dialog.hidden) return false;
+    setDialogOpen(dialog, false);
+    const { returnFocus, pendingAction } = settingsDialogState;
+    settingsDialogState = { returnFocus: null, pendingAction: null };
+    if (returnFocus && returnFocus.isConnected !== false && typeof returnFocus.focus === "function") returnFocus.focus();
+    if (pendingAction && isOnlineLookupEnabled()) pendingAction();
+    return true;
+}
+
+// ---------- "Suggested match" review dialog ----------
+
+function getReviewTrack(item) {
+    return item ? songs.find((t) => t.id === item.trackId) || null : null;
+}
+
+function describeMatchSource(suggestion) {
+    if (!suggestion) return "";
+    const s = suggestion.sources || {};
+    const names = [];
+    if (s.musicbrainzId) names.push("MusicBrainz");
+    if (s.itunesId) names.push("iTunes");
+    const pct = Math.round((Number(suggestion.score) || 0) * 100);
+    const m = suggestion.match || {};
+    const dur =
+        m.durationDiff === null || m.durationDiff === undefined
+            ? "length not compared"
+            : m.durationDiff <= 3
+              ? `length within ${Math.max(1, Math.round(m.durationDiff))} s`
+              : `length differs by ${Math.round(m.durationDiff)} s`;
+    return `From ${names.join(" + ") || "online"} · ${pct}% match · ${dur}`;
+}
+
+function buildReviewValueCell(change, which) {
+    const cell = document.createElement("td");
+    const value = which === "current" ? change.current : change.suggested;
+    if (change.field === "cover") {
+        if (value) {
+            const img = document.createElement("img");
+            img.className = "match-review-cover";
+            img.src = value;
+            img.alt = which === "current" ? "Current cover" : "Suggested cover";
+            img.width = 64;
+            img.height = 64;
+            img.loading = "lazy";
+            cell.append(img);
+        } else {
+            cell.textContent = "None";
+        }
+        return cell;
+    }
+    cell.textContent = value || "—";
+    if (!value) cell.setAttribute("aria-label", "Empty");
+    if (which === "current" && change.fromFile) {
+        const note = document.createElement("span");
+        note.className = "match-review-from-file";
+        note.textContent = " (from file)";
+        cell.append(note);
+    }
+    return cell;
+}
+
+/** Fills the dialog for the current item; returns the changes shown (may be empty). */
+function renderMatchReview() {
+    const M = getMetadataLookupModule();
+    const item = lookupReview.items[lookupReview.index];
+    const track = getReviewTrack(item);
+    const progress = document.getElementById("match-review-progress");
+    const file = document.getElementById("match-review-file");
+    const source = document.getElementById("match-review-source");
+    const body = document.getElementById("match-review-rows");
+    const overwrite = document.getElementById("match-review-overwrite");
+    const overwriteWrap = document.getElementById("match-review-overwrite-wrap");
+    const empty = document.getElementById("match-review-empty");
+    const accept = document.getElementById("match-review-accept-btn");
+    const skip = document.getElementById("match-review-skip-btn");
+    if (!item || !track || !M) return [];
+    const total = lookupReview.items.length;
+    if (progress) progress.textContent = total > 1 ? `${lookupReview.index + 1} of ${total}` : "";
+    if (progress) progress.hidden = total <= 1;
+    if (file) file.textContent = `${track.title} · ${track.relativePath || track.filename || ""}`.replace(/ · $/, "");
+    if (source) source.textContent = describeMatchSource(item.suggestion);
+
+    const fileFields = M.computeChanges(track, item.suggestion, { overwriteTags: true }).filter((c) => c.fromFile);
+    const overwriteTags = lookupReview.overwrite;
+    if (overwriteWrap) overwriteWrap.hidden = fileFields.length === 0;
+    if (overwrite) overwrite.checked = Boolean(overwriteTags);
+    const changes = M.computeChanges(track, item.suggestion, { overwriteTags });
+    const rows = changes.map((change) => {
+        const tr = document.createElement("tr");
+        if (change.fromFile) tr.className = "is-from-file";
+        const th = document.createElement("th");
+        th.scope = "row";
+        th.textContent = change.label;
+        tr.append(th);
+        tr.append(buildReviewValueCell(change, "current"));
+        tr.append(buildReviewValueCell(change, "suggested"));
+        return tr;
+    });
+    if (body) body.replaceChildren(...rows);
+    if (empty) empty.hidden = changes.length > 0;
+    if (accept) {
+        accept.disabled = changes.length === 0;
+        accept.textContent = changes.length ? `Accept ${changes.length === 1 ? "change" : `${changes.length} changes`}` : "Accept";
+    }
+    lookupReview.changes = changes;
+    return changes;
+}
+
+function openMatchReviewDialog(options = {}) {
+    const dialog = document.getElementById("match-review-dialog");
+    const items = (options.items || lookupReviewQueue).filter((item) => getReviewTrack(item));
+    if (!dialog || !items.length) return false;
+    const active = document.activeElement;
+    const toast = document.getElementById("library-toast");
+    lookupReview = {
+        open: true,
+        index: 0,
+        items: items.slice(),
+        single: Boolean(options.single),
+        overwrite: false,
+        changes: [],
+        returnFocus:
+            options.returnFocus ||
+            (active && active !== document.body && !(toast && typeof toast.contains === "function" && toast.contains(active))
+                ? active
+                : document.getElementById("lib-local-files")),
+    };
+    // Single-song "Fix info" where only values from the file would change: start with the overwrite box ticked
+    const M = getMetadataLookupModule();
+    const firstTrack = getReviewTrack(lookupReview.items[0]);
+    if (lookupReview.single && M && firstTrack && !M.computeChanges(firstTrack, lookupReview.items[0].suggestion).length) {
+        lookupReview.overwrite = true;
+    }
+    renderMatchReview();
+    setDialogOpen(dialog, true);
+    focusMatchReviewPrimary();
+    return true;
+}
+
+function focusMatchReviewPrimary() {
+    const accept = document.getElementById("match-review-accept-btn");
+    const skip = document.getElementById("match-review-skip-btn");
+    const target = accept && !accept.disabled ? accept : skip;
+    if (target && typeof target.focus === "function") target.focus();
+}
+
+function closeMatchReviewDialog(options = {}) {
+    const dialog = document.getElementById("match-review-dialog");
+    if (!lookupReview.open) return false;
+    lookupReview.open = false;
+    setDialogOpen(dialog, false);
+    let target = lookupReview.returnFocus;
+    lookupReview.returnFocus = null;
+    updateLookupUi();
+    // "Fix info" rows are re-rendered after an accept, so fall back to the same button in the new row
+    if (target && target.isConnected === false && lookupReview.single && lookupReview.items[0]) {
+        const container = document.getElementById("detail-top-tracks");
+        const row = container && container.querySelector ? container.querySelector(`[data-track-id="${cssEscapeValue(lookupReview.items[0].trackId)}"]`) : null;
+        target = (row && row.querySelector('[data-detail-track-action="fix-metadata"]')) || document.getElementById("detail-heading");
+    }
+    if (target && target.isConnected !== false && typeof target.focus === "function") target.focus();
+    if (options.message) showLibraryToast(options.message);
+    return true;
+}
+
+function finishReviewItem(item) {
+    if (!lookupReview.single) lookupReviewQueue = lookupReviewQueue.filter((q) => q.trackId !== item.trackId);
+    lookupReview.index++;
+    if (lookupReview.index >= lookupReview.items.length) {
+        flushImportUpdates({ force: true });
+        refreshLibraryViews();
+        const message = lookupReview.single ? "" : "All suggestions reviewed.";
+        closeMatchReviewDialog({ message });
+        return false;
+    }
+    renderMatchReview();
+    const track = getReviewTrack(lookupReview.items[lookupReview.index]);
+    const live = document.getElementById("match-review-live");
+    if (live) {
+        live.textContent = "";
+        live.textContent = `Next: ${lookupReview.index + 1} of ${lookupReview.items.length}, “${track ? track.title : ""}”`;
+    }
+    focusMatchReviewPrimary();
+    return true;
+}
+
+async function acceptMatchReview() {
+    const item = lookupReview.items[lookupReview.index];
+    const track = getReviewTrack(item);
+    if (!item || !track) return false;
+    const changes = lookupReview.changes || [];
+    if (changes.length) {
+        await applyLookupChanges(track, item.suggestion, changes, { auto: false });
+        if (lookupReview.single) showLibraryToast(`Updated “${track.title}”.`);
+    }
+    finishReviewItem(item);
+    return true;
+}
+
+async function skipMatchReview() {
+    const item = lookupReview.items[lookupReview.index];
+    if (!item) return false;
+    await recordLookupDecision(item.trackId, "skipped");
+    finishReviewItem(item);
+    return true;
+}
+
+function initMetadataLookupControls() {
+    const settingsBtn = document.getElementById("settings-btn");
+    if (settingsBtn) settingsBtn.addEventListener("click", () => openSettingsDialog());
+    const toggle = document.getElementById("setting-online-lookup");
+    if (toggle) {
+        toggle.checked = isOnlineLookupEnabled();
+        toggle.addEventListener("change", () => setOnlineLookupEnabled(Boolean(toggle.checked)));
+    }
+    const settingsDialog = document.getElementById("settings-dialog");
+    if (settingsDialog) {
+        settingsDialog.addEventListener("cancel", (e) => {
+            e.preventDefault();
+            closeSettingsDialog();
+        });
+        settingsDialog.addEventListener("click", (e) => {
+            if (e.target === settingsDialog) closeSettingsDialog();
+        });
+    }
+    for (const id of ["settings-close-btn", "settings-done-btn"]) {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener("click", () => closeSettingsDialog());
+    }
+
+    const lookupBtn = document.getElementById("detail-lookup-btn");
+    if (lookupBtn) lookupBtn.addEventListener("click", () => lookUpMissingInfo({ returnFocus: lookupBtn }));
+    const reviewBtn = document.getElementById("detail-review-matches-btn");
+    if (reviewBtn) reviewBtn.addEventListener("click", () => openMatchReviewDialog({ returnFocus: reviewBtn }));
+    const cancelBtn = document.getElementById("lookup-cancel-btn");
+    if (cancelBtn) cancelBtn.addEventListener("click", () => cancelMetadataLookup());
+
+    const reviewDialog = document.getElementById("match-review-dialog");
+    if (reviewDialog) {
+        reviewDialog.addEventListener("cancel", (e) => {
+            e.preventDefault();
+            closeMatchReviewDialog();
+        });
+    }
+    const accept = document.getElementById("match-review-accept-btn");
+    if (accept) accept.addEventListener("click", () => acceptMatchReview());
+    const skip = document.getElementById("match-review-skip-btn");
+    if (skip) skip.addEventListener("click", () => skipMatchReview());
+    const close = document.getElementById("match-review-close-btn");
+    if (close) close.addEventListener("click", () => closeMatchReviewDialog());
+    const overwrite = document.getElementById("match-review-overwrite");
+    if (overwrite) {
+        overwrite.addEventListener("change", () => {
+            lookupReview.overwrite = Boolean(overwrite.checked);
+            renderMatchReview();
+        });
+    }
+    updateLookupUi();
+}
+
 window.SpotTubeShell = {
+    // Item 15: online metadata lookup
+    isOnlineLookupEnabled,
+    setOnlineLookupEnabled,
+    setMetadataLookupClient,
+    lookUpMissingInfo,
+    cancelMetadataLookup,
+    fixTrackMetadata,
+    openSettingsDialog,
+    closeSettingsDialog,
+    openMatchReviewDialog,
+    closeMatchReviewDialog,
+    acceptMatchReview,
+    skipMatchReview,
+    getLookupReviewQueue: () => lookupReviewQueue.slice(),
+    getLookupRun: () => lookupRun,
+    updateLookupUi,
     initFolderSources,
     importFromFolderHandle,
     reconnectFolderSource,

@@ -11,6 +11,7 @@
     <script src="recommender.js" defer></script>
     <script src="queue.js" defer></script>
     <script src="player.js" defer></script>
+    <script src="metadata-lookup.js" defer></script>
     <script src="script.js" defer></script>
 </head>
 <body>
@@ -190,6 +191,9 @@
                         <button type="button" class="sign start-mix-nav-btn" id="header-start-mix-btn" title="Start endless hybrid radio mix">
                             <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 4a3 3 0 1 1 0 6 3 3 0 0 1 0-6z"/></svg>
                             <span>Start Mix</span>
+                        </button>
+                        <button type="button" class="settings-btn" id="settings-btn" aria-label="Settings" title="Settings" aria-haspopup="dialog" aria-controls="settings-dialog">
+                            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19.14 12.94a7.14 7.14 0 0 0 .05-.94 7.14 7.14 0 0 0-.05-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7 7 0 0 0-1.62-.94l-.36-2.54A.5.5 0 0 0 13.9 2.4h-3.84a.5.5 0 0 0-.5.42l-.36 2.54a7 7 0 0 0-1.62.94l-2.39-.96a.5.5 0 0 0-.6.22L2.67 8.88a.5.5 0 0 0 .12.64l2.03 1.58a7.4 7.4 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .6.22l2.39-.96c.5.38 1.04.7 1.62.94l.36 2.54a.5.5 0 0 0 .5.42h3.84a.5.5 0 0 0 .5-.42l.36-2.54a7 7 0 0 0 1.62-.94l2.39.96a.5.5 0 0 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.6a3.6 3.6 0 1 1 0-7.2 3.6 3.6 0 0 1 0 7.2z"/></svg>
                         </button>
                         <button type="button" class="log drawer-toggle-btn" id="toggle-drawer-btn" aria-expanded="true" aria-controls="right-drawer" title="Toggle Up Next &amp; Track Info Drawer">
                             <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1 3.75A.75.75 0 0 1 1.75 3h12.5a.75.75 0 0 1 0 1.5H1.75A.75.75 0 0 1 1 3.75zm0 4A.75.75 0 0 1 1.75 7h12.5a.75.75 0 0 1 0 1.5H1.75A.75.75 0 0 1 1 7.75zm0 4a.75.75 0 0 1 .75-.75h8.5a.75.75 0 0 1 0 1.5h-8.5a.75.75 0 0 1-.75-.75z"/></svg>
@@ -382,6 +386,17 @@
                                     <button type="button" class="detail-row-btn danger-btn" id="detail-delete-playlist-btn">Delete playlist</button>
                                     <button type="button" class="detail-row-btn" id="detail-import-folder-btn">Add a folder…</button>
                                     <button type="button" class="detail-row-btn" id="detail-import-more-btn">Add files…</button>
+                                    <button type="button" class="detail-row-btn" id="detail-lookup-btn" hidden>Look up missing info</button>
+                                    <button type="button" class="detail-row-btn" id="detail-review-matches-btn" aria-haspopup="dialog" hidden>Review suggestions (0)</button>
+                                </div>
+                                <div class="import-progress lookup-progress" id="lookup-progress" hidden>
+                                    <p class="import-progress-label" id="lookup-progress-label"></p>
+                                    <div class="import-progress-row">
+                                        <div class="import-progress-bar" id="lookup-progress-bar" role="progressbar" aria-labelledby="lookup-progress-label" aria-valuemin="0" aria-valuemax="1" aria-valuenow="0">
+                                            <span class="import-progress-fill"></span>
+                                        </div>
+                                        <button type="button" class="detail-row-btn" id="lookup-cancel-btn">Stop</button>
+                                    </div>
                                 </div>
                                 <div class="import-progress" id="import-progress" hidden>
                                     <p class="import-progress-label" id="import-progress-label"></p>
@@ -903,6 +918,68 @@
                 </div>
                 <p class="import-details-count" id="import-details-count"></p>
                 <ul class="import-details-list" id="import-details-list"></ul>
+            </div>
+        </dialog>
+
+        <dialog class="shortcuts-dialog playlist-dialog settings-dialog" id="settings-dialog" aria-labelledby="settings-title" hidden>
+            <div class="shortcuts-dialog-card playlist-dialog-card">
+                <div class="shortcuts-dialog-header">
+                    <h2 id="settings-title">Settings</h2>
+                    <button type="button" class="drawer-close-btn" id="settings-close-btn" aria-label="Close settings">&times;</button>
+                </div>
+                <p class="settings-note" id="settings-lookup-note" role="note" hidden></p>
+                <section class="settings-section" aria-labelledby="settings-lookup-heading">
+                    <h3 class="settings-section-title" id="settings-lookup-heading">Online lookup</h3>
+                    <div class="settings-row">
+                        <label class="settings-switch" for="setting-online-lookup">
+                            <span class="settings-switch-text">Look up missing song info online</span>
+                            <input type="checkbox" role="switch" id="setting-online-lookup" aria-checked="false" aria-describedby="setting-online-lookup-desc">
+                            <span class="settings-switch-track" aria-hidden="true"><span class="settings-switch-thumb"></span></span>
+                            <span class="settings-switch-state" id="setting-online-lookup-state" aria-hidden="true">Off</span>
+                        </label>
+                    </div>
+                    <div class="settings-desc" id="setting-online-lookup-desc">
+                        <p>Off by default. When on, for songs with missing info (no artist or album, a title taken from the file name, or no cover) the song's title, artist and album text and its length are sent to:</p>
+                        <ul>
+                            <li><strong>MusicBrainz</strong> (musicbrainz.org), at most one request per second</li>
+                            <li><strong>Apple iTunes Search</strong> (itunes.apple.com), for cover art and genre</li>
+                        </ul>
+                        <p>Covers then load from <strong>Cover Art Archive</strong> (coverartarchive.org) or Apple. Your audio files never leave this device, and no account or key is used. Close matches only fill in info the file was missing; anything less certain waits for you to review. Results are saved in this browser so each song is looked up once.</p>
+                    </div>
+                </section>
+                <div class="playlist-dialog-actions">
+                    <button type="button" class="hero-primary-btn" id="settings-done-btn">Done</button>
+                </div>
+            </div>
+        </dialog>
+
+        <dialog class="shortcuts-dialog playlist-dialog match-review-dialog" id="match-review-dialog" aria-labelledby="match-review-title" aria-describedby="match-review-file match-review-source" hidden>
+            <div class="shortcuts-dialog-card playlist-dialog-card">
+                <div class="shortcuts-dialog-header">
+                    <h2 id="match-review-title">Suggested match <span class="match-review-progress" id="match-review-progress"></span></h2>
+                    <button type="button" class="drawer-close-btn" id="match-review-close-btn" aria-label="Close review. Remaining suggestions stay in Local Files.">&times;</button>
+                </div>
+                <p class="match-review-file" id="match-review-file"></p>
+                <p class="match-review-source" id="match-review-source"></p>
+                <div class="match-review-table-wrap">
+                    <table class="match-review-table">
+                        <caption class="visually-hidden">Current info compared with the suggested match</caption>
+                        <thead>
+                            <tr><th scope="col">Field</th><th scope="col">Current</th><th scope="col">Suggested</th></tr>
+                        </thead>
+                        <tbody id="match-review-rows"></tbody>
+                    </table>
+                </div>
+                <p class="match-review-empty" id="match-review-empty" hidden>Nothing to change unless you also replace info the file already has.</p>
+                <label class="match-review-overwrite" id="match-review-overwrite-wrap" hidden>
+                    <input type="checkbox" id="match-review-overwrite">
+                    <span>Also replace info the file already has</span>
+                </label>
+                <p class="visually-hidden" id="match-review-live" aria-live="polite"></p>
+                <div class="playlist-dialog-actions">
+                    <button type="button" class="hero-secondary-btn" id="match-review-skip-btn">Skip</button>
+                    <button type="button" class="hero-primary-btn" id="match-review-accept-btn">Accept</button>
+                </div>
             </div>
         </dialog>
 

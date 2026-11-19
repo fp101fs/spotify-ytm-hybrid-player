@@ -4421,3 +4421,320 @@ span.detail-track-cover.import-shimmer {
         flex: 1 1 auto;
     }
 }
+
+/* ==================== Item 15: online metadata lookup ==================== */
+
+.settings-btn {
+    display: inline-grid;
+    place-items: center;
+    inline-size: 40px;
+    block-size: 40px;
+    flex-shrink: 0;
+    border: 1px solid var(--border-highlight);
+    border-radius: var(--radius-pill);
+    background: transparent;
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.settings-btn svg {
+    inline-size: 18px;
+    block-size: 18px;
+}
+
+.settings-btn:hover {
+    background-color: rgba(255, 255, 255, 0.08);
+}
+
+.settings-btn:focus-visible,
+.settings-switch input:focus-visible + .settings-switch-track,
+.match-review-overwrite input:focus-visible,
+#detail-lookup-btn:focus-visible,
+#detail-review-matches-btn:focus-visible,
+#lookup-cancel-btn:focus-visible,
+.match-review-dialog button:focus-visible,
+.settings-dialog button:focus-visible {
+    outline: 2px solid #fff;
+    outline-offset: 2px;
+}
+
+.settings-dialog,
+.match-review-dialog {
+    inline-size: min(560px, calc(100vw - 32px));
+    max-block-size: calc(100dvh - 32px);
+    overflow: auto;
+}
+
+.settings-note {
+    margin: 0;
+    padding: 10px 12px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--accent-spotify);
+    background-color: rgba(30, 215, 96, 0.08);
+    font-size: 0.88rem;
+    line-height: 1.45;
+}
+
+.settings-note[hidden],
+.match-review-empty[hidden],
+.match-review-overwrite[hidden],
+.match-review-progress[hidden],
+.lookup-progress[hidden],
+#detail-lookup-btn[hidden],
+#detail-review-matches-btn[hidden] {
+    display: none;
+}
+
+.settings-section {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.settings-section-title {
+    margin: 0;
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+}
+
+.settings-switch {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-block-size: 44px;
+    cursor: pointer;
+    font-weight: 700;
+}
+
+.settings-switch-text {
+    flex: 1;
+}
+
+/* The real checkbox stays focusable and clickable on top of the drawn track */
+.settings-switch input {
+    position: absolute;
+    opacity: 0;
+    inline-size: 44px;
+    block-size: 24px;
+    margin: 0;
+    cursor: pointer;
+}
+
+.settings-switch-track {
+    position: relative;
+    flex-shrink: 0;
+    inline-size: 44px;
+    block-size: 24px;
+    border-radius: var(--radius-pill);
+    background-color: #535353;
+    border: 1px solid #8a8a8a;
+    transition: background-color 0.15s ease;
+}
+
+.settings-switch-thumb {
+    position: absolute;
+    inset-block-start: 2px;
+    inset-inline-start: 2px;
+    inline-size: 18px;
+    block-size: 18px;
+    border-radius: 50%;
+    background-color: #fff;
+    transition: transform 0.15s ease;
+}
+
+.settings-switch input:checked + .settings-switch-track {
+    background-color: var(--accent-spotify);
+    border-color: var(--accent-spotify);
+}
+
+.settings-switch input:checked + .settings-switch-track .settings-switch-thumb {
+    transform: translateX(20px);
+    background-color: #000;
+}
+
+.settings-switch-state {
+    min-inline-size: 2em;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.settings-desc {
+    font-size: 0.86rem;
+    line-height: 1.5;
+    color: var(--text-secondary);
+}
+
+.settings-desc p,
+.settings-desc ul {
+    margin: 0 0 8px;
+}
+
+.settings-desc ul {
+    padding-inline-start: 20px;
+}
+
+.settings-desc strong {
+    color: var(--text-primary);
+}
+
+.match-review-progress {
+    margin-inline-start: 6px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+.match-review-file {
+    margin: 0;
+    font-weight: 700;
+    overflow-wrap: anywhere;
+}
+
+.match-review-source {
+    margin: -8px 0 0;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.match-review-table-wrap {
+    overflow-x: auto;
+}
+
+.match-review-table {
+    inline-size: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+
+.match-review-table th,
+.match-review-table td {
+    padding: 8px 10px;
+    text-align: start;
+    vertical-align: top;
+    border-block-end: 1px solid var(--border-subtle);
+    overflow-wrap: anywhere;
+}
+
+.match-review-table thead th {
+    font-size: 0.75rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+}
+
+.match-review-table tbody th {
+    color: var(--text-secondary);
+    font-weight: 600;
+    inline-size: 5.5em;
+}
+
+.match-review-table td:last-child {
+    color: var(--accent-spotify);
+    font-weight: 700;
+}
+
+.match-review-from-file {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+.match-review-cover {
+    display: block;
+    inline-size: 64px;
+    block-size: 64px;
+    object-fit: cover;
+    border-radius: 4px;
+    background-color: var(--bg-elevated);
+}
+
+.match-review-empty {
+    margin: 0;
+    font-size: 0.88rem;
+    color: var(--text-secondary);
+}
+
+.match-review-overwrite {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-block-size: 44px;
+    font-size: 0.9rem;
+    cursor: pointer;
+}
+
+.match-review-overwrite input {
+    inline-size: 20px;
+    block-size: 20px;
+    accent-color: var(--accent-spotify);
+}
+
+.match-review-dialog .hero-primary-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.lookup-progress {
+    margin-block-start: 12px;
+}
+
+/* Phones: both dialogs fill the screen; the actions stay reachable at the bottom */
+@media (max-width: 740px) {
+    .settings-btn {
+        inline-size: 44px;
+        block-size: 44px;
+    }
+
+    .settings-dialog,
+    .match-review-dialog {
+        inline-size: 100vw;
+        max-inline-size: 100vw;
+        block-size: 100dvh;
+        max-block-size: 100dvh;
+        margin: 0;
+        border-radius: 0;
+        border: 0;
+    }
+
+    .settings-dialog .shortcuts-dialog-card,
+    .match-review-dialog .shortcuts-dialog-card {
+        min-block-size: 100%;
+        box-sizing: border-box;
+        padding: 16px;
+    }
+
+    .settings-dialog .playlist-dialog-actions,
+    .match-review-dialog .playlist-dialog-actions {
+        margin-block-start: auto;
+        position: sticky;
+        inset-block-end: 0;
+        padding-block: 12px;
+        background-color: #141418;
+    }
+
+    .match-review-dialog .playlist-dialog-actions button,
+    .settings-dialog .playlist-dialog-actions button,
+    .match-review-dialog .drawer-close-btn,
+    .settings-dialog .drawer-close-btn {
+        min-block-size: 44px;
+        min-inline-size: 44px;
+    }
+
+    .match-review-dialog .playlist-dialog-actions button {
+        flex: 1;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .settings-switch-track,
+    .settings-switch-thumb {
+        transition: none;
+    }
+}
+
+#detail-lookup-btn[aria-disabled="true"] {
+    opacity: 0.6;
+    cursor: progress;
+}

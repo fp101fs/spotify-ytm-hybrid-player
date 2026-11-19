@@ -81,7 +81,7 @@ function memoryStore() {
 const noProbe = async () => 0;
 
 function createShellSandbox(options = {}) {
-    const files = ["storage.js", "library.js", "recommender.js", "queue.js", "player.js", "script.js"].map((f) =>
+    const files = ["storage.js", "library.js", "recommender.js", "queue.js", "player.js", "metadata-lookup.js", "script.js"].map((f) =>
         fs.readFileSync(path.join(ROOT_DIR, f), "utf8")
     );
     const elementsById = new Map();
@@ -96,6 +96,8 @@ function createShellSandbox(options = {}) {
                 "add-music-menu", "add-music-backdrop", "import-progress", "import-progress-pill", "home-add-music-card",
                 "import-details-dialog", "add-music-playlist-item", "add-music-folder-note",
                 "local-sources", "add-music-source-items",
+                "settings-dialog", "match-review-dialog", "lookup-progress", "detail-lookup-btn", "detail-review-matches-btn",
+                "settings-lookup-note", "match-review-empty", "match-review-overwrite-wrap",
             ].includes(id),
             textContent: "",
             innerHTML: "",
