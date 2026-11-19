@@ -10,7 +10,7 @@ We are transforming `/Users/iandodge/Documents/Spotify-UI-Clone` from a static H
 
 ## Plan
 - [x] 1. Build the static-first catalog indexer & Vercel-ready manifest (`scripts/build-catalog.js`, `tracks.json`, `vercel.json`): scan `/songs` and `/Images` to generate a rich `tracks.json` manifest (title, parsed primary/featured artists, album, duration, genre, mood tags, BPM/energy/valence attributes, relative URLs) so the app works 100% statically on Vercel and locally on port 5500 without hardcoded `127.0.0.1` URLs.
-- [ ] 2. Modernize the 3-pane Spotify + YT Music hybrid shell (`index.html`, `style.css`): full-viewport responsive layout with Left Library Sidebar, Center Main View (with top search bar, navigation history, and YT Music mood/activity filter chips), collapsible Right "Up Next / Radio Mix / Track Info" Drawer, and enhanced bottom Playbar.
+- [x] 2. Modernize the 3-pane Spotify + YT Music hybrid shell (`index.html`, `style.css`): full-viewport responsive layout with Left Library Sidebar, Center Main View (with top search bar, navigation history, and YT Music mood/activity filter chips), collapsible Right "Up Next / Radio Mix / Track Info" Drawer, and enhanced bottom Playbar.
 - [ ] 3. Build the persistent user taste, telemetry & IndexedDB store (`storage.js`): track play counts, completion ratios, skip penalties (early skip vs late skip), likes/dislikes, recently played timestamps, custom playlists, local user-imported audio blobs (via IndexedDB), and real-time Web Audio API analyzer features (RMS energy, bass/treble spectral centroid) cached per track.
 - [ ] 4. Build the Hybrid Recommendation & Scoring Engine (`recommender.js`): combine artist/collaborator affinity, genre/album/era clustering, audio feature cosine similarity (energy, tempo, mood, spectral profile), Spotify-style user taste affinity (completion rate + likes - skip decay), and recency/variety anti-repetition penalties.
 - [ ] 5. Implement the universal "Start Mix" Radio Generator & Queue Manager (`queue.js`): allow starting a nonstop radio mix from any single track, artist, album, mood chip, or active search result set, maintaining a live queue with manual reorder, "Play Next", "Add to Queue", and removal.
@@ -48,3 +48,38 @@ We are transforming `/Users/iandodge/Documents/Spotify-UI-Clone` from a static H
   - Ran `npm test` (`node --test tests/*.test.js`): all 4 test suites pass.
   - Verified against a zero-directory-listing Node `http.Server` that `/tracks.json` and all 12 relative `audioUrl` and `coverUrl` paths return HTTP 200.
   - Also fixed two latent bugs in `script.js`: off-by-one `getRandomIndex(0, songs.length - 1, currentTrackIndex)` on shuffle and missing `e` parameter in `mouseup` progress bar listener.
+
+### 2. Modernize the 3-pane Spotify + YT Music hybrid shell
+- **Files created/updated**:
+  - `index.html` (upgraded to a semantic 3-pane `.app-shell` > `.container#app-container` layout + bottom `.playbar`, while preserving legacy selectors used by existing tests and playback scripts)
+  - `style.css` (full-viewport `100dvh` CSS Grid 3-pane layout with `--left-pane-width: 310px`, `minmax(0, 1fr)`, `--right-pane-width: 336px`, `.container.drawer-collapsed` transition, standard `scrollbar-color` + `scrollbar-width: thin` with `@supports not (scrollbar-color: auto)` WebKit fallbacks, and tablet/mobile breakpoints at `980px` and `740px`)
+  - `script.js` (wired 3-pane shell interactions and exposed `window.SpotTubeShell` controller API for downstream modules)
+  - `tests/shell.test.js` (automated tests verifying 3-pane DOM landmarks, CSS layout/scrollbar rules, and `window.SpotTubeShell` runtime behavior in a VM sandbox)
+- **How it works & Key DOM IDs / APIs for later steps**:
+  - **Pane 1 — Left Library Sidebar (`#left-sidebar`, `.left`)**:
+    - Primary nav links: `#nav-home`, `#nav-search`, `#nav-supermix`.
+    - Library action buttons: `#import-audio-btn` (for Item 11 local audio import), `#create-playlist-btn` & `#sidebar-create-playlist-cta` (for Item 11 custom playlists), `#sidebar-import-audio-cta`.
+    - Library filter chips (`#library-filters`, `[data-lib-filter="all|tracks|artists|albums|playlists"]`).
+    - Pinned collections: `#lib-liked-songs` (with `#lib-liked-count`), `#lib-supermix`.
+    - Dynamic library list container: `#library-tracks-list` inside `#library-scroller`.
+  - **Pane 2 — Center Main View (`#center-main`, `.right`)**:
+    - Sticky `.navbar` with history buttons (`#nav-back`, `#nav-forward`), top search input (`#search-input`, `#search-clear-btn`, `#search-mix-btn`), `#header-start-mix-btn`, and `#toggle-drawer-btn` (`aria-expanded="true|false"`).
+    - Sticky YT Music mood/activity filter bar (`#mood-chips-bar`, `.mood-chip[data-mood]` for `All`, `Upbeat`, `Chill`, `Energetic`, `Feel Good`, `Romantic`, `Late Night`, `Workout`, `Focus`, `Party`, `Deep Cuts`, `Soulful`).
+    - Hybrid hero card (`#hero-mix-banner`) with `#hero-start-mix-btn`, `#hero-shuffle-all-btn`, `#stat-track-count`, and `#stat-active-mood`.
+    - Smart shelves mount point (`#home-shelves` for Item 10), main track grid (`.spotify-playlist#track-grid` with `#catalog-section-title` and `#catalog-count-badge`), plus view containers `#detail-view` (hidden, for Item 8) and `#search-view` (hidden, for Item 9).
+  - **Pane 3 — Collapsible Right Drawer (`#right-drawer`, `.right-drawer`)**:
+    - Toggled via `#toggle-drawer-btn`, `#playbar-queue-btn`, or `#drawer-close-btn` (toggles `.drawer-collapsed` on `#app-container`).
+    - Two tabs (`[data-drawer-tab="up-next|track-info"]`):
+      - `#panel-up-next`: `#mix-status-banner` (`#mix-active-badge`, `#mix-seed-label`, `#mix-autoplay-pill`), YT Music dynamic mix tuning chips (`#mix-tuning-chips`, `.tuning-chip[data-mix-mode="all|familiar|discover|deep-cuts|upbeat|chill"]`), `#drawer-now-playing` (`#now-playing-bpm-badge`), and `#queue-list` (`#drawer-queue-summary`).
+      - `#panel-track-info`: `#info-cover`, `#info-title`, `#info-artists`, `#info-album-year`, `#info-genre`, `#info-language`, `#info-quality`, `#info-mood-tags`, `#info-features` (percentage bars for Energy, Valence, Danceability, Acousticness, Popularity), and `#info-start-mix-btn`.
+  - **Bottom Playbar (`.playbar`)**:
+    - Left: `#playbar-cover`, `.song-title`, `.artist-names`, `#playbar-meta-badge`, `#like-btn`, `#playbar-mix-btn`.
+    - Center: `#shuffle`, `#previous`, `#play`, `#next`, `#repeat`, `.current-time`, `.progress-bar` > `.progress`, `.total-time`.
+    - Right: `#crossfade-badge` (`XFADE 0s`), `#volume-btn`, `.volume-bar` > `.volume`, `#playbar-queue-btn` with `#queue-count-badge`.
+  - **Global Shell API (`window.SpotTubeShell`)**:
+    - Exposes `{ getSongs, playMusic, resolveTrackIndex, getFilteredSongs, getUpcomingQueueTracks, setMoodFilter, toggleRightDrawer, switchDrawerTab, renderCatalogGrid, renderLibrarySidebar, renderDrawerNowPlaying, renderDrawerQueue, renderDrawerTrackInfo, syncActiveTrackUI, getState, setState }`.
+- **Deferred / Not done yet**:
+  - Persistent LocalStorage/IndexedDB taste & telemetry store (`storage.js`) is Item 3.
+  - Multi-signal recommendation engine (`recommender.js`) and full queue manager (`queue.js`) are Items 4–6.
+- **Testing & verification**:
+  - Added `tests/shell.test.js` and ran `npm test` (`node --test tests/*.test.js`): all 7 tests pass.
