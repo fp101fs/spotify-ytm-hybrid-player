@@ -3819,3 +3819,23 @@ hr {
         grid-column: 1 / -1;
     }
 }
+
+/* ==================== Item 12 polish ==================== */
+/* Chip rows sit in flex columns and were shrinking to ~10px tall, clipping the
+   chips and showing a bright horizontal scrollbar. Keep their natural height and
+   hide the scrollbar (rows still scroll with trackpad / shift+wheel / touch). */
+.library-filters,
+.mood-chips-bar {
+    flex-shrink: 0;
+    scrollbar-width: none;
+}
+
+.library-filters::-webkit-scrollbar,
+.mood-chips-bar::-webkit-scrollbar {
+    display: none;
+}
+
+.lib-chip,
+.mood-chip {
+    flex-shrink: 0;
+}

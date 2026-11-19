@@ -1,31 +1,64 @@
-# Spotify Clone
+# SpotTube — Spotify + YT Music Hybrid Player
 
-This project is a Spotify clone built with HTML, CSS, and JavaScript. It offers a unique UI experience and allows you to play your downloaded songs by placing them in specific folders. The application is fully responsive, providing an optimal viewing experience across a wide range of devices.
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Ffp101fs%2Fspotify-ytm-hybrid-player&project-name=spotify-ytm-hybrid-player&repository-name=spotify-ytm-hybrid-player)
+
+A static-first music player that mixes Spotify's 3-pane layout, Daily Mixes and crossfade with YouTube Music's one-click "Start Mix" radio, mood tuning chips and live Up Next queue. No backend: it runs from a pre-built `tracks.json` manifest, and keeps your taste profile, playlists and imported audio in the browser (localStorage + IndexedDB).
+
+> The repository is private, so the Deploy button works for accounts that can read it. Vercel will ask you to connect GitHub and will create a copy of the repo in your account.
 
 ## Features
 
-- **Custom UI Experience:** A unique and engaging user interface that differs from the standard Spotify design.
-- **Local Song Playback:** Play your downloaded songs by placing them in the `songs` folder.
-- **Responsive Design:** The application is fully responsive and works well on desktop, tablet, and mobile devices.
+- **3-pane shell**: library sidebar, main view with search, Back/Forward history and mood chips, and a collapsible Up Next / Radio Mix / Track Info drawer.
+- **Start Mix anywhere**: endless radio from a track, artist, album, mood chip, playlist or search query.
+- **Mix tuning chips**: All, Familiar, Discover, Deep Cuts, Upbeat, Chill. Upcoming tracks re-rank without interrupting playback.
+- **Recommender**: artist and collaborator affinity, genre/album/era clustering, audio-feature similarity, your plays/likes/skips, and anti-repetition.
+- **Player**: dual-deck crossfade (0–12 s), the queue refills itself when fewer than 3 tracks are left, keyboard shortcuts (press `?`), MediaSession controls.
+- **Home dashboard**: Your Supermix, Daily Mix 1–3, On Repeat, Rediscover, Jump Back In.
+- **Artist, album and song pages** with top tracks, discography and "Similar in Your Library".
+- **Omni-search** over songs, artists, albums, genres and moods, with a Top Result card and "Start Search Mix".
+- **Bring your own music**: drag and drop files or folders (`.mp3`, `.flac`, `.wav`, `.m4a`, `.ogg`, …) or use the picker. Tags and cover art are read in the browser and the audio is stored in IndexedDB. Custom playlists and Liked Songs included.
 
-## Installation
+## Run locally
 
-1. Clone the repository :
+Any static server works. No dependencies to install.
 
-   ```bash
-   git clone https://github.com/JustJ01/Spotify-Clone.git
-2. Navigate to the project directory :
+```bash
+npm run build          # regenerate tracks.json from songs/ and Images/
+python3 -m http.server 5500
+# open http://localhost:5500
+```
 
-    ```bash
-    cd Spotify-Clone
-3. Live Preview index.html file according to your convenience.
+## Add songs to the built-in catalog
 
-## Usage
+1. Put audio in `songs/` named `Title-Artist.mp3` (several artists: `Title-Artist A, Artist B.mp3`).
+2. Put the cover in `Images/` named `Title.jpeg`.
+3. Run `npm run build` to rebuild `tracks.json`. Vercel runs the same command on every deploy.
 
-- Add your songs :
+Songs you import in the browser don't need any of this; they stay on that device only.
 
-    Place your downloaded songs in the `songs` folder. The format of the song name should be {song name-artist.mp3} and place your downloaded image of that song in the `Images` folder and the format of that image name should be {song name.jpeg}.
+## Deploy
 
+Click the button above, or with the Vercel CLI: `vercel --prod`. `vercel.json` sets the build command (`node scripts/build-catalog.js`), serves the repo root as static output, and adds `Accept-Ranges` and long-cache headers for `songs/` and `Images/`.
 
-## Acknowledgements
-- Inspired by Spotify.
+## Tests
+
+```bash
+npm test               # node --test, no dependencies (Node 18+)
+```
+
+## Project layout
+
+| File | Role |
+| --- | --- |
+| `index.html`, `style.css` | 3-pane shell and styles |
+| `script.js` | UI wiring, views, `window.SpotTubeShell` |
+| `player.js` | crossfade audio engine, shortcuts, MediaSession |
+| `queue.js` | Start Mix radio generator and queue |
+| `recommender.js` | scoring engine |
+| `storage.js` | taste, telemetry, playlists, IndexedDB audio |
+| `library.js` | local import, tag parsing, playlists |
+| `scripts/build-catalog.js` | builds `tracks.json` |
+
+## Credits
+
+Built on [JustJ01/Spotify-UI-Clone](https://github.com/JustJ01/Spotify-UI-Clone). Not affiliated with Spotify or YouTube. The bundled songs are for personal demo use only.

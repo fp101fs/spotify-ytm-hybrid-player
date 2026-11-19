@@ -5935,23 +5935,16 @@ function toggleShortcutsModal(forceState) {
         typeof forceState === "boolean" ? forceState : !isShortcutsModalOpen;
     if (!modal) return isShortcutsModalOpen;
 
-    modal.hidden = !isShortcutsModalOpen;
+    setDialogOpen(modal, isShortcutsModalOpen);
     if (isShortcutsModalOpen) {
-        modal.setAttribute("open", "");
-        if (typeof modal.showModal === "function") {
-            try {
-                if (!modal.open) modal.showModal();
-            } catch (_) {}
-        }
         syncCrossfadeUI();
-    } else {
-        if (typeof modal.removeAttribute === "function") {
-            modal.removeAttribute("open");
-        }
-        if (typeof modal.close === "function") {
-            try {
-                modal.close();
-            } catch (_) {}
+        if (!modal.__spotTubeCloseSync && typeof modal.addEventListener === "function") {
+            // Native Esc / form[method=dialog] closes bypass this toggle; keep state in sync
+            modal.addEventListener("close", () => {
+                isShortcutsModalOpen = false;
+                modal.hidden = true;
+            });
+            modal.__spotTubeCloseSync = true;
         }
     }
     return isShortcutsModalOpen;
