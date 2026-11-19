@@ -252,7 +252,7 @@ async function getSongs() {
         }
     }
 
-    // Item 16: YouTube videos this browser added (from yt-allowlist.json)
+    // Item 16: YouTube videos this browser added
     await loadYouTubeCatalog(baseTracks);
 
     return baseTracks;
@@ -7461,12 +7461,12 @@ function buildCollectionDetailData(spec = {}) {
         tracks = getYouTubeTracks();
         id = "youtube";
         title = "YouTube videos";
-        description = "Public-domain and Creative Commons music videos. They play in the normal player; turn on Video to watch.";
+        description = "Music videos from YouTube. They play in the normal player; turn on Video to watch.";
         badge = "YOUTUBE";
-        eyebrow = "PUBLIC DOMAIN & CREATIVE COMMONS";
+        eyebrow = "MUSIC VIDEOS";
         tracklistTitle = "Your YouTube videos";
         mixLabel = "Start YouTube Mix";
-        emptyHint = "No videos yet. Paste a link above or add one from the public-domain list.";
+        emptyHint = "No videos yet. Paste a link above or add one of the suggestions.";
     } else {
         // Newest first, so a folder being added shows at the top of the list while its tags fill in
         tracks = getImportedLocalTracks()
@@ -9481,13 +9481,14 @@ function initMetadataLookupControls() {
     updateLookupUi();
 }
 
-// ==================== Item 16: YouTube public-domain music videos ====================
-// Videos on yt-allowlist.json can be added as catalog tracks (`source: "youtube"`). Their audio comes from the
+// ==================== Item 16: YouTube music videos ====================
+// Any YouTube video can be added as a catalog track (`source: "youtube"`); the add box shows a notice about rights
+// (no license check). yt-allowlist.json is a list of suggested public-domain / CC videos with credits. Their audio comes from the
 // same-origin proxy (api/yt/stream) through the normal decks, so crossfade, mixes and MediaSession work as for any
 // song. "Video" in the playbar shows a muted <video> that follows the playing deck. Only the video IDs the user
-// added are kept on the device (preferences); nothing else from YouTube is stored.
+// added, plus title/artist/duration for videos outside the suggestions, are kept on the device (preferences).
 
-let ytAllowlist = []; // validated entries from yt-allowlist.json
+let ytAllowlist = []; // validated suggestion entries from yt-allowlist.json
 let ytApiState = { status: "unknown", message: "" }; // "unknown" | "ok" | "missing"
 const ytFailedTrackIds = new Set(); // failed this session: left out of mixes until reload
 let ytVideoWanted = false; // the user turned Video on; it reopens for the next YouTube track
@@ -9514,6 +9515,59 @@ function setAddedYouTubeIds(ids) {
     if (store && typeof store.setPreferences === "function") store.setPreferences({ youtubeVideoIds: Array.from(new Set(ids)) });
 }
 
+/** Saved title/artist/channel/duration for added videos that aren't in the suggestions. */
+function getYouTubeVideoMeta() {
+    const store = getStorage();
+    const prefs = store && typeof store.getPreferences === "function" ? store.getPreferences() : null;
+    const meta = prefs && prefs.youtubeVideoMeta;
+    return meta && typeof meta === "object" ? meta : {};
+}
+
+function setYouTubeVideoMeta(id, info) {
+    const store = getStorage();
+    if (!store || typeof store.setPreferences !== "function") return;
+    const meta = { ...getYouTubeVideoMeta() };
+    if (info) meta[id] = { title: info.title || "", artist: info.artist || "", channel: info.channel || "", duration: Number(info.duration) || 0 };
+    else delete meta[id];
+    store.setPreferences({ youtubeVideoMeta: meta });
+}
+
+/** Entry for an added video: the suggestion if there is one, else saved details (or placeholders). */
+function getYouTubeEntry(id) {
+    const YT = getYouTubeModule();
+    return findAllowlistEntry(id) || (YT ? YT.entryFromInfo(id, getYouTubeVideoMeta()[id] || {}) : null);
+}
+
+/** Fills in the real title/channel/duration of a video added by link (from /api/yt/info). */
+async function lookupYouTubeDetails(track) {
+    if (!track || findAllowlistEntry(track.youtubeId)) return false;
+    try {
+        const res = await fetch(`./api/yt/info?id=${encodeURIComponent(track.youtubeId)}`);
+        if (!res.ok) return false;
+        const info = await res.json();
+        if (!info || !info.title) return false;
+        const YT = getYouTubeModule();
+        const entry = YT.entryFromInfo(track.youtubeId, { title: info.title, artist: info.artist || info.channel, channel: info.channel, duration: info.duration });
+        const fresh = YT.buildYouTubeTrack(entry);
+        Object.assign(track, {
+            title: fresh.title,
+            primaryArtist: fresh.primaryArtist,
+            artists: fresh.artists,
+            featuredArtists: fresh.featuredArtists,
+            artistDisplay: fresh.artistDisplay,
+            channel: fresh.channel,
+            duration: fresh.duration || track.duration,
+            durationFormatted: fresh.duration ? fresh.durationFormatted : track.durationFormatted,
+        });
+        if (getAddedYouTubeIds().includes(track.youtubeId)) setYouTubeVideoMeta(track.youtubeId, entry);
+        refreshLibraryViews();
+        if (songs[currentTrackIndex] === track) syncActiveTrackUI();
+        return true;
+    } catch (_) {
+        return false;
+    }
+}
+
 function getYouTubeTracks() {
     return songs.filter((t) => t && t.source === "youtube");
 }
@@ -9532,17 +9586,18 @@ async function loadYouTubeCatalog(baseTracks) {
         ytAllowlist = [];
         return [];
     }
-    const byId = new Map(ytAllowlist.map((e) => [e.id, e]));
     const existing = new Set(baseTracks.map((t) => t.id));
+    const meta = getYouTubeVideoMeta();
     const added = [];
     for (const id of getAddedYouTubeIds()) {
-        const entry = byId.get(id);
-        if (!entry) continue; // taken off the list since: not played any more
-        const track = YT.buildYouTubeTrack(entry);
+        if (!YT.isVideoId(id)) continue;
+        const track = YT.buildYouTubeTrack(getYouTubeEntry(id));
         if (existing.has(track.id)) continue;
         baseTracks.push(track);
         existing.add(track.id);
         added.push(track);
+        // Added by link before its title came back: look it up again
+        if (!findAllowlistEntry(id) && !(meta[id] && meta[id].title)) lookupYouTubeDetails(track);
     }
     return added;
 }
@@ -9589,7 +9644,7 @@ function updateYouTubeCount() {
     const el = document.getElementById("lib-youtube-count");
     if (!el) return;
     const n = getYouTubeTracks().length;
-    const base = n > 0 ? `YouTube • ${n} ${n === 1 ? "video" : "videos"}` : "Public-domain music videos";
+    const base = n > 0 ? `YouTube • ${n} ${n === 1 ? "video" : "videos"}` : "Music videos from YouTube";
     el.textContent = ytApiState.status === "missing" && n > 0 ? `${base} · server off` : base;
 }
 
@@ -9598,31 +9653,34 @@ function findAllowlistEntry(id) {
 }
 
 /**
- * The "Add YouTube video" box. Returns { status: "added" | "exists" | "not-allowed" | "invalid", message, track? }.
+ * The "Add YouTube video" box. Any video can be added (the box shows a rights notice).
+ * Returns { status: "added" | "exists" | "invalid", message, track? }.
  */
 function addYouTubeVideo(input, options = {}) {
     const YT = getYouTubeModule();
     if (!YT) return { status: "invalid", message: "YouTube support didn't load." };
     const id = YT.parseYouTubeId(String(input || ""));
     if (!id) return { status: "invalid", message: YT.describeYtError("INVALID_ID") };
-    const entry = findAllowlistEntry(id);
-    if (!entry) {
-        return {
-            status: "not-allowed",
-            id,
-            message: `Video ${id} isn't on this site's public-domain list, so it can't be added. To add it, put its ID, title, artist, license (Public domain, CC0 or CC BY) and a link that shows the license in yt-allowlist.json, then reload.`,
-        };
-    }
     const existing = songs.find((t) => t.youtubeId === id && t.source === "youtube");
     if (existing) return { status: "exists", track: existing, message: `“${existing.title}” is already in YouTube videos.` };
-    const track = YT.buildYouTubeTrack(entry);
+    const suggested = findAllowlistEntry(id);
+    const track = YT.buildYouTubeTrack(suggested || YT.entryFromInfo(id));
     songs.push(track);
     setAddedYouTubeIds([...getAddedYouTubeIds(), id]);
     if (!options.skipRefresh) {
         refreshLibraryViews();
         updateYouTubeCount();
     }
-    return { status: "added", track, message: `Added “${track.title}” by ${track.artistDisplay} (${track.license}).` };
+    if (!suggested) {
+        // Saved with placeholders first so a reload keeps it; the lookup fills in the real title
+        setYouTubeVideoMeta(id, { title: "", artist: "", channel: "", duration: 0 });
+        if (ytApiState.status !== "missing") lookupYouTubeDetails(track).then((ok) => {
+            if (ok) setYouTubeAddStatus(`Added “${track.title}” by ${track.artistDisplay}.`);
+        });
+        return { status: "added", track, message: `Added video ${id}. Looking up its title…` };
+    }
+    const credit = track.license ? ` (${track.license})` : "";
+    return { status: "added", track, message: `Added “${track.title}” by ${track.artistDisplay}${credit}.` };
 }
 
 function addAllYouTubeVideos() {
@@ -9642,6 +9700,7 @@ function removeYouTubeVideo(trackId) {
     const track = songs.find((t) => t.id === trackId && t.source === "youtube");
     if (!track) return false;
     setAddedYouTubeIds(getAddedYouTubeIds().filter((id) => id !== track.youtubeId));
+    if (getYouTubeVideoMeta()[track.youtubeId]) setYouTubeVideoMeta(track.youtubeId, null);
     if (ytVideo.trackId === track.id) closeYouTubeVideo({ keepWanted: true });
     removeTracksFromCatalog([track.id]);
     refreshLibraryViews();
@@ -9720,13 +9779,13 @@ function renderYouTubeLibraryPanel() {
             <img class="yt-available-thumb" alt="" loading="lazy" decoding="async">
             <div class="yt-available-meta">
                 <span class="yt-available-name">${title}</span>
-                <span class="yt-available-sub">${artist}${duration ? ` · ${duration}` : ""} · <a href="" target="_blank" rel="noopener noreferrer" class="yt-license-link">${escapeHtml(entry.license)}</a></span>
+                <span class="yt-available-sub">${artist}${duration ? ` · ${duration}` : ""}${entry.license ? ` · <a href="" target="_blank" rel="noopener noreferrer" class="yt-license-link">${escapeHtml(entry.license)}</a>` : ""}</span>
             </div>
             <button type="button" class="detail-row-btn" data-yt-add="${escapeHtml(entry.id)}" aria-label="Add ${title} by ${artist}">Add</button>`;
         const img = li.querySelector("img");
         if (img) img.src = getYouTubeModule().thumbnailUrl(entry.id);
         const link = li.querySelector("a");
-        if (link) {
+        if (link && entry.source) {
             link.href = entry.source;
             link.setAttribute("aria-label", `${entry.license}: license source for ${entry.title} (opens in a new tab)`);
         }
@@ -9827,14 +9886,19 @@ function renderYouTubePanelChrome(track) {
     if (license) {
         license.textContent = "";
         const text = document.createElement("span");
-        text.textContent = `${track.license || "License unknown"}${track.channel ? ` · uploaded by ${track.channel}` : ""} · `;
-        const link = document.createElement("a");
-        link.href = track.sourceUrl || track.watchUrl;
-        link.target = "_blank";
-        link.rel = "noopener noreferrer";
-        link.textContent = "license source";
-        link.setAttribute("aria-label", `License source for ${track.title} (opens in a new tab)`);
-        license.append(text, link);
+        const credits = [track.license, track.channel ? `uploaded by ${track.channel}` : ""].filter(Boolean).join(" · ");
+        text.textContent = credits;
+        license.append(text);
+        if (track.license && track.sourceUrl) {
+            const link = document.createElement("a");
+            link.href = track.sourceUrl;
+            link.target = "_blank";
+            link.rel = "noopener noreferrer";
+            link.textContent = "license source";
+            link.setAttribute("aria-label", `License source for ${track.title} (opens in a new tab)`);
+            text.textContent = `${credits} · `;
+            license.append(link);
+        }
     }
     const watch = document.getElementById("yt-video-watch-link");
     if (watch) {
@@ -10120,7 +10184,7 @@ function initYouTubeControls() {
 }
 
 window.SpotTubeShell = {
-    // Item 16: YouTube public-domain videos
+    // Item 16: YouTube music videos
     initYouTubeControls,
     getYouTubeTracks,
     getYouTubeAllowlist: () => ytAllowlist.slice(),

@@ -2,7 +2,7 @@
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Ffp101fs%2Fspotify-ytm-hybrid-player&project-name=spotify-ytm-hybrid-player&repository-name=spotify-ytm-hybrid-player)
 
-A static-first music player that mixes Spotify's 3-pane layout, Daily Mixes and crossfade with YouTube Music's one-click "Start Mix" radio, mood tuning chips and live Up Next queue. No backend: it runs from a pre-built `tracks.json` manifest, and keeps your taste profile, playlists and imported audio in the browser (localStorage + IndexedDB).
+A static-first music player that mixes Spotify's 3-pane layout, Daily Mixes and crossfade with YouTube Music's one-click "Start Mix" radio, mood tuning chips and live Up Next queue. It runs from a pre-built `tracks.json` manifest, keeps your taste profile, playlists and imported audio in the browser (localStorage + IndexedDB), and uses one small server function (`/api/yt`) only for YouTube videos.
 
 > The repository is private, so the Deploy button works for accounts that can read it. Vercel will ask you to connect GitHub and will create a copy of the repo in your account.
 
@@ -17,6 +17,8 @@ A static-first music player that mixes Spotify's 3-pane layout, Daily Mixes and 
 - **Artist, album and song pages** with top tracks, discography and "Similar in Your Library".
 - **Omni-search** over songs, artists, albums, genres and moods, with a Top Result card and "Start Search Mix".
 - **Bring your own music**: "+ Add Music" in the sidebar (or the "+" in Your Library, or the Home empty state) adds a folder or files (`.mp3`, `.flac`, `.wav`, `.m4a`, `.ogg`, …); drag and drop works anywhere. Custom playlists and Liked Songs included. See [Your own music](#your-own-music).
+- **YouTube music videos**: paste any YouTube link to add the video as a song; it crossfades and mixes like the rest, and the playbar's **Video** button shows the video in sync. See [YouTube videos](#youtube-videos).
+- **Optional online lookup** (Settings, off by default): fills in missing artist, album and cover art for imported songs from MusicBrainz, Cover Art Archive and iTunes Search. No accounts or keys; your audio never leaves the device.
 
 ## Your own music
 
@@ -26,15 +28,26 @@ A static-first music player that mixes Spotify's 3-pane layout, Daily Mixes and 
 - Local Files shows which mode each source uses. Everything stays on your device.
 - On phones the Add Music menu is a bottom sheet; "Add a folder…" is hidden where the browser can't pick folders.
 
+## YouTube videos
+
+- Open **YouTube videos** in Your Library and paste a watch, youtu.be, Shorts, embed, live or music.youtube.com link (or a bare video ID). Any video can be added. The title, channel and length are looked up from YouTube.
+- **Notice:** only add videos you have the right to play. Public-domain and Creative Commons music is a safe choice. The app shows this as a notice and doesn't check licenses.
+- A few public-domain and Creative Commons videos are offered as suggestions, with credits. They are listed in `yt-allowlist.json` (`id`, `title`, `artist`, plus optional `license`, `source`, `album`, `genre`, `moods`, …).
+- Sound goes through the app's server (`/api/yt`, using `@distube/ytdl-core`), so crossfade, mixes and MediaSession work. **Video** shows a muted copy that follows the audio, with captions when YouTube has them.
+- Without the server (plain static hosting), or when YouTube blocks the server (for example "Sign in to confirm you're not a bot", common on cloud hosts), videos open in YouTube's own player instead.
+- Only the added video IDs and their titles are saved in the browser. Thumbnails and the fallback player load from Google (`i.ytimg.com`, `youtube-nocookie.com`).
+
 ## Run locally
 
-Any static server works. No dependencies to install.
+Needs Node 22.22.2 or newer.
 
 ```bash
+npm install            # one dependency: @distube/ytdl-core (for YouTube videos)
 npm run build          # regenerate tracks.json from songs/ and Images/
-python3 -m http.server 5500
-# open http://localhost:5500
+npm start              # app + /api on http://127.0.0.1:5500 (PORT/HOST to change)
 ```
+
+`npm run start:static` (Python's static server) also works, without YouTube videos.
 
 ## Add songs to the built-in catalog
 
@@ -46,12 +59,13 @@ Songs you import in the browser don't need any of this; they stay on that device
 
 ## Deploy
 
-Click the button above, or with the Vercel CLI: `vercel --prod`. `vercel.json` sets the build command (`node scripts/build-catalog.js`), serves the repo root as static output, and adds `Accept-Ranges` and long-cache headers for `songs/` and `Images/`.
+Click the button above, or with the Vercel CLI: `vercel --prod`. `vercel.json` sets the build command (`node scripts/build-catalog.js`), serves the repo root as static output, and adds `Accept-Ranges` and long-cache headers for `songs/` and `Images/`. `api/yt.js` deploys as a Vercel function (60 s, 1 GB). YouTube may bot-check Vercel's servers; the app then falls back to YouTube's player.
 
 ## Tests
 
 ```bash
-npm test               # node --test, no dependencies (Node 18+)
+npm test               # node --test, YouTube is mocked (no network)
+npm run test:yt        # optional live check against YouTube
 ```
 
 ## Project layout
@@ -65,8 +79,13 @@ npm test               # node --test, no dependencies (Node 18+)
 | `recommender.js` | scoring engine |
 | `storage.js` | taste, telemetry, playlists, IndexedDB audio |
 | `library.js` | local import, tag parsing, playlists |
+| `metadata-lookup.js` | optional MusicBrainz / Cover Art Archive / iTunes lookup |
+| `youtube.js` | YouTube link parsing, suggestions, tracks (browser + server) |
+| `api/yt.js`, `api/_lib/` | `/api/yt` function: info, audio/video streams, captions |
+| `yt-allowlist.json` | suggested YouTube videos and their credits |
+| `scripts/dev-server.js` | local server for the app and `/api` |
 | `scripts/build-catalog.js` | builds `tracks.json` |
 
 ## Credits
 
-Built on [JustJ01/Spotify-UI-Clone](https://github.com/JustJ01/Spotify-UI-Clone). Not affiliated with Spotify or YouTube. The bundled songs are for personal demo use only.
+Built on [JustJ01/Spotify-UI-Clone](https://github.com/JustJ01/Spotify-UI-Clone). Not affiliated with Spotify or YouTube. The bundled songs are for personal demo use only. You are responsible for the YouTube videos you add.

@@ -7,7 +7,8 @@
  *   GET|HEAD /api/yt/stream?id=&kind=audio|video → bytes proxied from YouTube, Range/206 supported
  *   GET /api/yt/captions?id=&lang=          → WebVTT
  *
- * Only IDs in yt-allowlist.json are served. The googlevideo URLs are tied to the server's IP and send no
+ * Any valid video ID is served (the app shows a rights notice; yt-allowlist.json is only the suggestions and
+ * their credits). The googlevideo URLs are tied to the server's IP and send no
  * CORS headers, and the crossfade engine needs same-origin audio, so bytes go through here.
  */
 const fs = require("node:fs");
@@ -159,7 +160,6 @@ class YtRequestError extends Error {
 }
 
 const STATUS = {
-    NOT_ALLOWED: 403,
     INVALID_ID: 400,
     BOT_CHECK: 503,
     AGE_RESTRICTED: 403,
@@ -225,7 +225,7 @@ function sendJson(res, status, body, extraHeaders = {}) {
 
 function sendError(res, err, log) {
     const mapped = mapYtError(err);
-    if (log && mapped.code !== "NOT_ALLOWED" && mapped.code !== "INVALID_ID") {
+    if (log && mapped.code !== "INVALID_ID") {
         log.warn(`[yt] ${mapped.code}: ${String((err && err.message) || err).slice(0, 300)}`);
     }
     sendJson(res, mapped.status, { error: { code: mapped.code, message: mapped.message, embed: mapped.embed } });
@@ -248,12 +248,11 @@ function createYtHandler(options = {}) {
         return toAllowlist(options.allowlist);
     }
 
-    function requireAllowed(rawId) {
+    /** A valid ID; `entry` is its suggestion-list entry (title/artist/credits) or null. */
+    function requireId(rawId) {
         const id = YT.parseYouTubeId(String(rawId || ""));
         if (!id) throw new YtRequestError("INVALID_ID", 400);
-        const entry = getAllowlist().byId.get(id);
-        if (!entry) throw new YtRequestError("NOT_ALLOWED", 403);
-        return { id, entry };
+        return { id, entry: getAllowlist().byId.get(id) || null };
     }
 
     function getInfo(id, signal) {
@@ -274,21 +273,21 @@ function createYtHandler(options = {}) {
     }
 
     async function handleInfo(url, res) {
-        const { id, entry } = requireAllowed(url.searchParams.get("id"));
+        const { id, entry } = requireId(url.searchParams.get("id"));
         const info = await getInfo(id);
         const thumbs = (info.thumbnails || []).slice().sort((a, b) => (b.width || 0) - (a.width || 0));
         sendJson(res, 200, {
             id,
-            title: entry.title,
-            artist: entry.artist,
+            title: entry ? entry.title : info.title,
+            artist: entry ? entry.artist : info.channel,
             youtubeTitle: info.title,
             channel: info.channel,
             duration: info.duration,
             thumbnail: thumbs[0] ? thumbs[0].url : YT.thumbnailUrl(id),
             thumbnails: thumbs,
-            license: entry.license,
-            licenseUrl: entry.licenseUrl || null,
-            source: entry.source,
+            license: (entry && entry.license) || null,
+            licenseUrl: (entry && entry.licenseUrl) || null,
+            source: (entry && entry.source) || null,
             formats: {
                 audio: describeFormat(chooseAudioFormat(info.formats)),
                 video: describeFormat(chooseVideoFormat(info.formats)),
@@ -303,7 +302,7 @@ function createYtHandler(options = {}) {
     }
 
     async function handleStream(req, url, res) {
-        const { id } = requireAllowed(url.searchParams.get("id"));
+        const { id } = requireId(url.searchParams.get("id"));
         const kind = url.searchParams.get("kind") === "video" ? "video" : "audio";
         const info = await getInfo(id);
         const format = chooseFormat(info.formats, kind);
@@ -379,7 +378,7 @@ function createYtHandler(options = {}) {
     }
 
     async function handleCaptions(url, res) {
-        const { id } = requireAllowed(url.searchParams.get("id"));
+        const { id } = requireId(url.searchParams.get("id"));
         const info = await getInfo(id);
         const lang = String(url.searchParams.get("lang") || "");
         const track = (info.captions || []).find((c) => c.lang === lang);

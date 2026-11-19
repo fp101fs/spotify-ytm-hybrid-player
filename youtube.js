@@ -1,5 +1,5 @@
 /**
- * Item 16: YouTube public-domain / Creative Commons music videos.
+ * Item 16: YouTube music videos (any video; the app shows a notice about rights instead of enforcing a license).
  *
  * Shared by the browser (window.SpotTubeYouTube) and the Node server (`api/_lib/yt-server.js`):
  * link/ID parsing, allowlist validation, catalog tracks, error wording and video/audio sync.
@@ -21,10 +21,10 @@
         "youtube-nocookie.com",
         "www.youtube-nocookie.com",
     ]);
-    // "Public domain", "CC0 (public domain)", "CC BY 4.0", "CC BY-SA 3.0"… The NC/ND variants don't allow this use.
-    const LICENSE_RE = /^(public domain|cc0\b|cc by(?:-sa)?\b)/i;
-    const NOT_OK_LICENSE_RE = /\b(nc|nd)\b/i;
     const API_BASE = "api/yt";
+    // Shown next to the add box. A notice only: any video can be added.
+    const RIGHTS_NOTICE =
+        "Notice: only add videos you have the right to play. Public-domain and Creative Commons music is a safe choice.";
 
     function isVideoId(value) {
         return typeof value === "string" && ID_RE.test(value);
@@ -59,11 +59,6 @@
         return isVideoId(candidate) ? candidate : null;
     }
 
-    function isAllowedLicense(license) {
-        const text = String(license || "").trim();
-        return LICENSE_RE.test(text) && !NOT_OK_LICENSE_RE.test(text.replace(/^cc0\b/i, ""));
-    }
-
     function cleanText(value, max = 200) {
         return String(value == null ? "" : value).replace(/\s+/g, " ").trim().slice(0, max);
     }
@@ -77,9 +72,9 @@
     }
 
     /**
-     * Checks `yt-allowlist.json`. Each entry needs id, title, artist, a license that allows this use
-     * ("Public domain", "CC0…", "CC BY…" / "CC BY-SA…") and a source link that proves it.
-     * Returns `{ entries, errors }`; bad entries are left out, never served.
+     * Checks `yt-allowlist.json`, the suggested videos shown under the add box. Each entry needs id, title
+     * and artist; license and source (a link about the license) are optional and only shown as credits.
+     * Returns `{ entries, errors }`; bad entries are left out of the suggestions.
      */
     function validateAllowlist(json) {
         const list = Array.isArray(json) ? json : json && Array.isArray(json.videos) ? json.videos : [];
@@ -95,12 +90,11 @@
             const title = cleanText(raw.title);
             const artist = cleanText(raw.artist);
             if (!title || !artist) return errors.push(`${where} (${id}): needs a title and an artist`);
-            if (!isAllowedLicense(raw.license)) {
-                return errors.push(`${where} (${id}): license "${raw.license || ""}" must be Public domain, CC0 or CC BY`);
+            if (raw.source != null && raw.source !== "" && !isHttpUrl(raw.source)) {
+                return errors.push(`${where} (${id}): source must be a link`);
             }
-            if (!isHttpUrl(raw.source)) return errors.push(`${where} (${id}): needs a source link that shows the license`);
             seen.add(id);
-            entries.push({ ...raw, id, title, artist, license: cleanText(raw.license, 80), source: String(raw.source) });
+            entries.push({ ...raw, id, title, artist, license: cleanText(raw.license, 80), source: raw.source ? String(raw.source) : "" });
         });
         return { entries, errors };
     }
@@ -123,7 +117,24 @@
         return `https://i.ytimg.com/vi/${encodeURIComponent(id)}/hqdefault.jpg`;
     }
 
-    /** A catalog track for one allowlist entry; it plays through the same-origin proxy like any song. */
+    /**
+     * Entry for a video that isn't in the suggestions, from saved details or `/api/yt/info`
+     * (`{ title, channel, duration }`). Falls back to placeholders until the lookup arrives.
+     */
+    function entryFromInfo(id, info = {}) {
+        const channel = cleanText(info.channel);
+        return {
+            id,
+            title: cleanText(info.title) || `YouTube video ${id}`,
+            artist: cleanText(info.artist) || channel || "YouTube",
+            channel,
+            duration: Number(info.duration) || 0,
+            license: cleanText(info.license, 80),
+            source: isHttpUrl(info.source) ? String(info.source) : "",
+        };
+    }
+
+    /** A catalog track for one video entry; it plays through the same-origin proxy like any song. */
     function buildYouTubeTrack(entry) {
         const id = entry.id;
         const artists = Array.isArray(entry.artists) && entry.artists.length
@@ -140,7 +151,7 @@
             artists,
             featuredArtists: artists.slice(1),
             artistDisplay: artists.join(", "),
-            album: cleanText(entry.album) || "YouTube · Public-domain videos",
+            album: cleanText(entry.album) || "YouTube",
             year: Number.isFinite(Number(entry.year)) ? Number(entry.year) : null,
             duration,
             durationFormatted: formatDuration(duration),
@@ -156,9 +167,9 @@
             danceability: clamp01(entry.danceability, 0.45),
             acousticness: clamp01(entry.acousticness, 0.6),
             popularity: clamp01(entry.popularity, 0.4),
-            license: entry.license,
+            license: cleanText(entry.license, 80),
             licenseUrl: isHttpUrl(entry.licenseUrl) ? entry.licenseUrl : "",
-            sourceUrl: entry.source,
+            sourceUrl: isHttpUrl(entry.source) ? String(entry.source) : "",
             watchUrl: `https://www.youtube.com/watch?v=${id}`,
             channel: cleanText(entry.channel),
         };
@@ -181,8 +192,6 @@
 
     // Plain-language messages for the server's error codes (see api/_lib/yt-server.js mapYtError).
     const ERROR_MESSAGES = {
-        NOT_ALLOWED:
-            "That video isn't on this site's public-domain list, so it can't be played here. To add it, put its ID, title, artist, license (Public domain, CC0 or CC BY) and a link that shows the license in yt-allowlist.json, then reload or redeploy.",
         INVALID_ID: "That doesn't look like a YouTube video link. Paste a watch, youtu.be, Shorts or music.youtube.com link.",
         BOT_CHECK:
             "YouTube asked this server to confirm it isn't a bot (“Sign in to confirm you're not a bot”). This happens most on cloud hosts. Try again later, run the app on your own computer with npm start, or watch it in YouTube's player.",
@@ -228,8 +237,9 @@
         API_BASE,
         isVideoId,
         parseYouTubeId,
-        isAllowedLicense,
+        RIGHTS_NOTICE,
         validateAllowlist,
+        entryFromInfo,
         buildYouTubeTrack,
         isYouTubeTrack,
         streamUrl,

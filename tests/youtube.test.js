@@ -1,5 +1,5 @@
 "use strict";
-// Item 16: YouTube public-domain videos. ytdl is mocked; nothing here touches the network.
+// Item 16: YouTube music videos. ytdl is mocked; nothing here touches the network.
 const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("node:fs");
@@ -63,19 +63,13 @@ test("parseYouTubeId accepts watch, youtu.be, Shorts, embed, live and music link
     }
 });
 
-test("allowlist: the shipped yt-allowlist.json is valid; licenses and fields are enforced", () => {
+test("suggestions: the shipped yt-allowlist.json is valid; license is a credit, not a requirement", () => {
     const shipped = YT.validateAllowlist(ALLOWLIST);
     assert.deepStrictEqual(shipped.errors, []);
     assert.ok(shipped.entries.length >= 3);
-    for (const e of shipped.entries) {
-        assert.ok(YT.isAllowedLicense(e.license), e.license);
-        assert.match(e.source, /^https:\/\//);
-    }
-
-    for (const ok of ["Public domain", "CC0 1.0 (public domain)", "CC BY 4.0", "CC BY-SA 3.0"]) assert.ok(YT.isAllowedLicense(ok), ok);
-    for (const bad of ["CC BY-NC 4.0", "CC BY-ND 4.0", "CC BY-NC-SA", "Standard YouTube License", "", "All rights reserved"]) {
-        assert.ok(!YT.isAllowedLicense(bad), bad);
-    }
+    for (const e of shipped.entries) assert.match(e.source, /^https:\/\//);
+    assert.strictEqual(YT.isAllowedLicense, undefined, "no license check any more");
+    assert.match(YT.RIGHTS_NOTICE, /^Notice: only add videos you have the right to play/);
 
     const base = { title: "T", artist: "A", license: "CC BY 4.0", source: "https://example.org/proof" };
     const { entries, errors } = YT.validateAllowlist({
@@ -83,15 +77,23 @@ test("allowlist: the shipped yt-allowlist.json is valid; licenses and fields are
             { id: "aaaaaaaaaaa", ...base },
             { id: "aaaaaaaaaaa", ...base }, // duplicate
             { id: "short", ...base },
-            { id: "bbbbbbbbbbb", ...base, license: "CC BY-NC 4.0" },
+            { id: "bbbbbbbbbbb", ...base, license: "Standard YouTube License" },
+            { id: "eeeeeeeeeee", title: "T", artist: "A" }, // no license or source: fine
             { id: "ccccccccccc", ...base, source: "not a link" },
             { id: "ddddddddddd", ...base, artist: "" },
         ],
     });
-    assert.deepStrictEqual(entries.map((e) => e.id), ["aaaaaaaaaaa"]);
-    assert.strictEqual(errors.length, 5);
+    assert.deepStrictEqual(entries.map((e) => e.id), ["aaaaaaaaaaa", "bbbbbbbbbbb", "eeeeeeeeeee"]);
+    assert.strictEqual(errors.length, 4);
     assert.ok(errors.some((e) => /listed twice/.test(e)));
-    assert.ok(errors.some((e) => /must be Public domain/.test(e)));
+    assert.ok(errors.some((e) => /source must be a link/.test(e)));
+
+    const unlisted = YT.buildYouTubeTrack(YT.entryFromInfo("fffffffffff"));
+    assert.strictEqual(unlisted.title, "YouTube video fffffffffff");
+    assert.strictEqual(unlisted.artistDisplay, "YouTube");
+    assert.strictEqual(unlisted.license, "");
+    const filled = YT.buildYouTubeTrack(YT.entryFromInfo("fffffffffff", { title: "Real", channel: "Chan", duration: 61 }));
+    assert.deepStrictEqual([filled.title, filled.artistDisplay, filled.durationFormatted], ["Real", "Chan", "1:01"]);
 });
 
 test("buildYouTubeTrack makes a same-origin catalog track; embed URL and video sync helpers", () => {
@@ -173,7 +175,6 @@ test("mapYtError: bot check, age/region blocks, removed videos and the rest get 
         [{ code: "NO_FORMAT", message: "x" }, "NO_FORMAT", 502, true],
         [{ code: "INVALID_URL", message: "x" }, "INVALID_ID", 400, false],
         [new Error("socket hang up"), "UPSTREAM", 502, true],
-        [new Server.YtRequestError("NOT_ALLOWED", 403), "NOT_ALLOWED", 403, false],
     ];
     for (const [err, code, status, embed] of cases) {
         const m = Server.mapYtError(err);
@@ -242,7 +243,7 @@ async function withServer(handler, fn) {
     }
 }
 
-test("handler: status, info, allowlist enforcement and invalid IDs", async () => {
+test("handler: status, info, any video ID and invalid IDs", async () => {
     const adapter = fakeAdapter();
     const handler = Server.createYtHandler({ adapter, allowlist: ALLOWLIST, log: null });
     await withServer(handler, async (base) => {
@@ -265,16 +266,20 @@ test("handler: status, info, allowlist enforcement and invalid IDs", async () =>
         const viaLink = await fetch(`${base}/api/yt?action=info&id=${encodeURIComponent(`https://youtu.be/${ID}`)}`);
         assert.strictEqual(viaLink.status, 200);
 
-        const notAllowed = await fetch(`${base}/api/yt/stream?id=dQw4w9WgXcQ&kind=audio`);
-        assert.strictEqual(notAllowed.status, 403);
-        assert.strictEqual((await notAllowed.json()).error.code, "NOT_ALLOWED");
+        // Videos outside the suggestions are served too; title/artist come from YouTube, no license
+        const unlisted = await fetch(`${base}/api/yt/info?id=dQw4w9WgXcQ`);
+        assert.strictEqual(unlisted.status, 200);
+        const unlistedInfo = await unlisted.json();
+        assert.deepStrictEqual([unlistedInfo.title, unlistedInfo.artist, unlistedInfo.license], ["YouTube title", "Some Channel", null]);
+        const unlistedStream = await fetch(`${base}/api/yt/stream?id=dQw4w9WgXcQ&kind=audio`, { method: "HEAD" });
+        assert.strictEqual(unlistedStream.status, 200);
         const invalid = await fetch(`${base}/api/yt/info?id=nope`);
         assert.strictEqual(invalid.status, 400);
         assert.strictEqual((await invalid.json()).error.code, "INVALID_ID");
         assert.strictEqual((await fetch(`${base}/api/yt/other`)).status, 404);
         assert.strictEqual((await fetch(`${base}/api/yt/status`, { method: "POST" })).status, 405);
-        // One lookup served all of the above (cached until the URLs expire)
-        assert.strictEqual(adapter.calls.getInfo, 1);
+        // One lookup per video served all of the above (cached until the URLs expire)
+        assert.strictEqual(adapter.calls.getInfo, 2);
     });
 });
 
@@ -429,7 +434,11 @@ async function youtubeShell(options = {}) {
             if (options.infoError) {
                 return { ok: false, status: 503, headers: { get: () => "application/json" }, json: async () => ({ error: { code: options.infoError } }) };
             }
-            return { ok: true, headers: { get: () => "application/json" }, json: async () => ({ captions: options.captions || [] }) };
+            return {
+                ok: true,
+                headers: { get: () => "application/json" },
+                json: async () => ({ title: "Looked-up title", artist: "Looked-up channel", channel: "Looked-up channel", duration: 200, captions: options.captions || [] }),
+            };
         }
         return { ok: true, json: async () => manifest };
     };
@@ -440,7 +449,7 @@ async function youtubeShell(options = {}) {
     return ctx;
 }
 
-test("app: the Add YouTube video box adds allowlisted links and explains everything else", async () => {
+test("app: the Add YouTube video box adds any video link and shows a rights notice", async () => {
     const { shell, el, sandbox } = await youtubeShell();
     assert.strictEqual(shell.getYouTubeAllowlist().length, ALLOWLIST.videos.length);
     assert.strictEqual(shell.getYouTubeTracks().length, 0, "nothing added on first run");
@@ -454,9 +463,17 @@ test("app: the Add YouTube video box adds allowlisted links and explains everyth
     r = shell.addYouTubeVideo(`https://youtu.be/${ID}`);
     assert.strictEqual(r.status, "exists");
 
+    // Not a suggestion: added anyway, then its title is looked up
     r = shell.addYouTubeVideo("https://www.youtube.com/watch?v=dQw4w9WgXcQ");
-    assert.strictEqual(r.status, "not-allowed");
-    assert.match(r.message, /isn't on this site's public-domain list[\s\S]*yt-allowlist\.json/);
+    assert.strictEqual(r.status, "added");
+    assert.match(r.message, /^Added video dQw4w9WgXcQ/);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.strictEqual(r.track.title, "Looked-up title");
+    assert.strictEqual(r.track.artistDisplay, "Looked-up channel");
+    assert.strictEqual(sandbox.SpotTubeStorage.getPreferences().youtubeVideoMeta.dQw4w9WgXcQ.title, "Looked-up title");
+    assert.match(el("yt-add-status").textContent, /^Added “Looked-up title” by Looked-up channel/);
+    assert.ok(shell.removeYouTubeVideo("yt-dQw4w9WgXcQ"));
+    assert.strictEqual(sandbox.SpotTubeStorage.getPreferences().youtubeVideoMeta.dQw4w9WgXcQ, undefined);
 
     r = shell.addYouTubeVideo("https://vimeo.com/123");
     assert.strictEqual(r.status, "invalid");
@@ -500,12 +517,16 @@ test("app: added videos come back after a reload; mixes leave them out while the
     // Reload: getSongs() rebuilds the track from the saved ID + allowlist
     const prefs = first.sandbox.SpotTubeStorage.getPreferences();
     const second = createShellSandbox();
-    second.sandbox.SpotTubeStorage.setPreferences({ youtubeVideoIds: prefs.youtubeVideoIds.concat("zzzzzzzzzzz") });
+    second.sandbox.SpotTubeStorage.setPreferences({
+        youtubeVideoIds: prefs.youtubeVideoIds.concat("zzzzzzzzzzz"),
+        youtubeVideoMeta: { zzzzzzzzzzz: { title: "Saved title", artist: "Saved artist", duration: 90 } },
+    });
     second.sandbox.fetch = async (url) =>
         String(url).includes("yt-allowlist.json") ? { ok: true, json: async () => ALLOWLIST } : { ok: true, json: async () => manifest };
     const songs = await second.shell.getSongs();
     const yt = songs.filter((t) => t.source === "youtube");
-    assert.deepStrictEqual(yt.map((t) => t.youtubeId), [ID], "IDs no longer on the list are dropped");
+    assert.deepStrictEqual(yt.map((t) => t.youtubeId), [ID, "zzzzzzzzzzz"], "videos outside the suggestions are kept");
+    assert.deepStrictEqual([yt[1].title, yt[1].artistDisplay, yt[1].duration], ["Saved title", "Saved artist", 90]);
 });
 
 test("app: without the server, playing a YouTube track opens YouTube's player with sound instead", async () => {
@@ -596,6 +617,9 @@ test("HTML/CSS hooks: labelled add box, aria-pressed toggle, video panel, script
     assert.ok(html.indexOf('src="youtube.js"') < html.indexOf('src="script.js"'));
     assert.match(html, /<label[^>]*for="yt-add-input"[^>]*>Add YouTube video<\/label>/);
     assert.match(html, /id="yt-add-status" role="status"/);
+    assert.match(html, /id="yt-add-notice">Notice: only add videos you have the right to play/);
+    assert.match(html, /aria-describedby="yt-add-help yt-add-notice yt-add-status"/);
+    assert.doesNotMatch(html, /Only videos on this site's public-domain list can play/);
     assert.match(html, /id="playbar-video-btn"[^>]*aria-pressed="false"[^>]*aria-controls="yt-video-panel"/);
     assert.match(html, /<video[^>]*id="yt-video"[^>]*muted[^>]*playsinline/);
     assert.match(html, /id="yt-video-cc-btn" aria-pressed="false"/);

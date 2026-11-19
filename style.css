@@ -4777,11 +4777,16 @@ span.detail-track-cover.import-shimmer {
 }
 
 .yt-add-help,
+.yt-add-notice,
 .yt-server-status {
     margin: 0;
     font-size: 0.85rem;
     line-height: 1.45;
     color: var(--text-secondary);
+}
+
+.yt-add-notice {
+    font-style: italic;
 }
 
 .yt-server-status.is-warning {
