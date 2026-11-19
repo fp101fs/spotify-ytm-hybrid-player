@@ -9,6 +9,7 @@
     <script src="storage.js" defer></script>
     <script src="recommender.js" defer></script>
     <script src="queue.js" defer></script>
+    <script src="player.js" defer></script>
     <script src="script.js" defer></script>
 </head>
 <body>
@@ -126,7 +127,7 @@
                         <div class="grid-item"><a href="#legal">Local First</a></div>
                         <div class="grid-item"><a href="#privacy">IndexedDB Ready</a></div>
                         <div class="grid-item"><a href="#vercel">Vercel Static</a></div>
-                        <div class="grid-item"><a href="#shortcuts">Shortcuts (?)</a></div>
+                        <div class="grid-item"><a href="#shortcuts" id="shortcuts-link">Shortcuts (?)</a></div>
                     </div>
                 </div>
             </aside>
@@ -451,7 +452,7 @@
             </div>
 
             <div class="right-section">
-                <button type="button" class="crossfade-pill" id="crossfade-badge" title="Crossfade duration (configurable in Audio Engine)">
+                <button type="button" class="crossfade-pill" id="crossfade-badge" title="Click to cycle Crossfade (0–12s) or Shift-click for Audio Engine settings">
                     <span>XFADE 0s</span>
                 </button>
                 <button type="button" class="mute" id="volume-btn" aria-label="Mute or Unmute">
@@ -469,6 +470,59 @@
                 </button>
             </div>
         </footer>
+
+        <!-- ==================== AUDIO ENGINE CROSSFADE & KEYBOARD SHORTCUTS DIALOG ==================== -->
+        <dialog class="shortcuts-dialog" id="shortcuts-modal" aria-labelledby="shortcuts-modal-title" hidden>
+            <div class="shortcuts-dialog-card">
+                <div class="shortcuts-dialog-header">
+                    <div>
+                        <span class="hero-eyebrow">DUAL-DECK WEB AUDIO ENGINE</span>
+                        <h2 id="shortcuts-modal-title">Crossfade &amp; Keyboard Shortcuts</h2>
+                    </div>
+                    <button type="button" class="drawer-close-btn" id="shortcuts-close-btn" aria-label="Close shortcuts dialog">&times;</button>
+                </div>
+
+                <div class="crossfade-config-panel">
+                    <div class="crossfade-config-header">
+                        <label for="crossfade-slider">Dual-Deck Crossfade Duration</label>
+                        <span class="crossfade-value-pill" id="crossfade-slider-value">0s (Gapless)</span>
+                    </div>
+                    <input
+                        type="range"
+                        id="crossfade-slider"
+                        class="crossfade-slider"
+                        min="0"
+                        max="12"
+                        step="1"
+                        value="0"
+                        aria-label="Crossfade duration in seconds (0 to 12)"
+                    >
+                    <div class="crossfade-presets-row" role="group" aria-label="Crossfade presets">
+                        <button type="button" class="tuning-chip active" data-xfade-preset="0">0s Gapless</button>
+                        <button type="button" class="tuning-chip" data-xfade-preset="2">2s</button>
+                        <button type="button" class="tuning-chip" data-xfade-preset="4">4s</button>
+                        <button type="button" class="tuning-chip" data-xfade-preset="6">6s</button>
+                        <button type="button" class="tuning-chip" data-xfade-preset="8">8s</button>
+                        <button type="button" class="tuning-chip" data-xfade-preset="12">12s</button>
+                    </div>
+                </div>
+
+                <div class="shortcuts-grid" aria-label="Keyboard Shortcuts Reference">
+                    <div class="shortcut-row"><kbd>Space</kbd> / <kbd>K</kbd><span>Play / Pause</span></div>
+                    <div class="shortcut-row"><kbd>N</kbd> / <kbd>Shift+&rarr;</kbd><span>Next Track</span></div>
+                    <div class="shortcut-row"><kbd>P</kbd> / <kbd>Shift+&larr;</kbd><span>Previous Track</span></div>
+                    <div class="shortcut-row"><kbd>&larr;</kbd> / <kbd>&rarr;</kbd><span>Seek -5s / +5s</span></div>
+                    <div class="shortcut-row"><kbd>&uarr;</kbd> / <kbd>&darr;</kbd><span>Volume +5% / -5%</span></div>
+                    <div class="shortcut-row"><kbd>M</kbd><span>Mute / Unmute</span></div>
+                    <div class="shortcut-row"><kbd>Q</kbd><span>Toggle Up Next Drawer</span></div>
+                    <div class="shortcut-row"><kbd>S</kbd> / <kbd>R</kbd><span>Shuffle / Repeat</span></div>
+                    <div class="shortcut-row"><kbd>F</kbd><span>Like Current Song</span></div>
+                    <div class="shortcut-row"><kbd>X</kbd><span>Cycle Crossfade (0–12s)</span></div>
+                    <div class="shortcut-row"><kbd>/</kbd><span>Focus Omni-Search</span></div>
+                    <div class="shortcut-row"><kbd>?</kbd><span>Shortcuts &amp; Audio Dialog</span></div>
+                </div>
+            </div>
+        </dialog>
     </div>
 </body>
 </html>

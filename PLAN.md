@@ -15,7 +15,7 @@ We are transforming `/Users/iandodge/Documents/Spotify-UI-Clone` from a static H
 - [x] 4. Build the Hybrid Recommendation & Scoring Engine (`recommender.js`): combine artist/collaborator affinity, genre/album/era clustering, audio feature cosine similarity (energy, tempo, mood, spectral profile), Spotify-style user taste affinity (completion rate + likes - skip decay), and recency/variety anti-repetition penalties.
 - [x] 5. Implement the universal "Start Mix" Radio Generator & Queue Manager (`queue.js`): allow starting a nonstop radio mix from any single track, artist, album, mood chip, or active search result set, maintaining a live queue with manual reorder, "Play Next", "Add to Queue", and removal.
 - [x] 6. Add YT Music Dynamic Mix Tuning Chips inside the "Up Next / Mix" drawer: allow switching the active radio mix mode on the fly between *All*, *Familiar*, *Discover*, *Deep Cuts*, *Upbeat*, and *Chill*, dynamically re-ranking and regenerating upcoming auto-queued tracks without interrupting current playback.
-- [ ] 7. Implement Continuous Nonstop Playback & Gapless/Crossfade Audio Engine (`player.js`): dual-deck HTML5 Audio + Web Audio API crossfader (configurable 0–12s crossfade), automatic endless queue replenishment when fewer than 3 tracks remain, keyboard shortcuts, and MediaSession API integration.
+- [x] 7. Implement Continuous Nonstop Playback & Gapless/Crossfade Audio Engine (`player.js`): dual-deck HTML5 Audio + Web Audio API crossfader (configurable 0–12s crossfade), automatic endless queue replenishment when fewer than 3 tracks remain, keyboard shortcuts, and MediaSession API integration.
 - [ ] 8. Build rich Artist, Album, and Song Detail Views with one-click "Start Mix" hero buttons: clicking any artist or album opens a dedicated header view showing top tracks, discography, "Similar in Your Library" recommendations, and a prominent "Start Mix" radio button.
 - [ ] 9. Build Instant Omni-Search with "Start Mix from Search Results": live filtering across songs, artists, albums, and genres/moods as you type, featuring a "Top Result" hero card and a "Start Search Mix" button that turns any search query into an endless tailored radio station.
 - [ ] 10. Implement Spotify-style Smart Auto-Mixes & YT Music "Supermix" on the Home Dashboard: automatically generate *Your Supermix*, *Daily Mix 1–3* (clustered by genre/artist/vibe), *On Repeat*, *Rediscover / Forgotten Favorites*, and *Jump Back In* shelves.
@@ -213,3 +213,30 @@ We are transforming `/Users/iandodge/Documents/Spotify-UI-Clone` from a static H
   - Continuous Nonstop Playback & Gapless/Crossfade Audio Engine (`player.js`) with dual-deck HTML5 Audio + Web Audio API crossfader, keyboard shortcuts, and MediaSession API is Item 7.
 - **Testing & verification**:
   - Added `tests/mix-tuning.test.js` and ran `npm test` (`node --test tests/*.test.js`): all 27 tests across 6 test files pass.
+
+### 7. Continuous Nonstop Playback & Gapless/Crossfade Audio Engine (`player.js`)
+- **Files created/updated**:
+  - `player.js` (universal browser `window.SpotTubePlayer` + CommonJS `module.exports` dual-deck HTML5 Audio + Web Audio API crossfade & gapless playback engine, endless queue replenishment monitor, keyboard shortcuts controller, and MediaSession API integration)
+  - `index.html` (loaded `<script src="player.js" defer></script>` after `queue.js` and before `script.js`; added `#shortcuts-link` id and `#shortcuts-modal` native `<dialog>` with `#crossfade-slider` (`0–12s`), `#crossfade-slider-value`, `[data-xfade-preset="0|2|4|6|8|12"]` chips, and keyboard shortcuts reference grid)
+  - `style.css` (added `.crossfade-pill.active`, `.shortcuts-dialog`, `.crossfade-config-panel`, `.crossfade-slider`, `.shortcuts-grid`, and `.shortcut-row kbd` styling)
+  - `script.js` (integrated `SpotTubePlayer` into `playMusic`, `togglePlayPause`, `seekPlaybackTo`/`seekPlaybackBy`, dual-deck `bindAudioDeckListeners`, `#crossfade-badge` / `#crossfade-slider` / `#shortcuts-modal` controls, global `keydown` listener, and MediaSession action handlers)
+  - `tests/player.test.js` (automated test suite verifying equal-power crossfade gain curves, 0–12s crossfade configuration & storage persistence, dual-deck Web Audio API `GainNode` ramping, standby deck gapless preloading, `< 3` automatic queue replenishment, MediaSession API metadata/position/handlers, keyboard shortcuts & editable input guard, and shell integration)
+- **How it works & Key APIs for later steps (`window.SpotTubePlayer` & `window.SpotTubeShell`)**:
+  - **Dual-Deck Gapless & Crossfade Engine (`createPlayerEngine` / `window.SpotTubePlayer`)**:
+    - Maintains two HTML5 Audio decks (`deckA` and `deckB`) routed through Web Audio API `GainNode`s (`gainNodeA`, `gainNodeB`) and a shared `AnalyserNode` when `AudioContext` is available, with automatic HTML5 `audio.volume` fallback.
+    - `computeCrossfadeGains(progress)` -> equal-power cosine/sine curve (`outgoingGain = cos(p * π / 2)`, `incomingGain = sin(p * π / 2)`).
+    - `setCrossfadeSeconds(seconds)` / `cycleCrossfadeSeconds()` / `getCrossfadeSeconds()` -> configurable `0–12s` crossfade (`CROSSFADE_PRESETS = [0, 2, 4, 6, 8, 12]`), persisted in `SpotTubeStorage.setPreferences({ crossfadeSeconds })`.
+    - `preloadNextTrack(nextTrack)` -> gaplessly buffers the next queued track on the inactive standby deck (`standbyDeck`).
+    - `evaluatePlaybackTick(currentTime, duration)` -> called on `timeupdate`; ensures endless queue replenishment whenever `queue.length < 3`, updates MediaSession position state, and automatically triggers `beginCrossfade(nextTrack)` when `remainingSeconds <= crossfadeSeconds`.
+    - `beginCrossfade(nextTrack, options)` / `stepCrossfade(progress)` / `completeCrossfade()` -> smoothly crossfades from the outgoing deck to the incoming standby deck while recording natural completion telemetry (`endedNaturally: true`) on `SpotTubeStorage`.
+  - **Keyboard Shortcuts (`handleKeyDown` / `SpotTubeShell.handleShellKeyDown`)**:
+    - Automatically ignored when focus is inside `<input type="search|text">`, `<textarea>`, `<select>`, or `[contenteditable="true"]` (except `Escape` which closes `#shortcuts-modal` or blurs the input).
+    - Shortcuts: `Space` / `K` (Play/Pause), `N` / `Shift+ArrowRight` (Next track), `P` / `Shift+ArrowLeft` (Previous track), `ArrowLeft` / `J` (Seek -5s), `ArrowRight` / `L` (Seek +5s), `ArrowUp` / `ArrowDown` (Volume +5% / -5%), `M` (Mute/Unmute), `Q` (Toggle Up Next Drawer), `S` (Shuffle), `R` (Repeat), `F` (Like current track), `X` (Cycle Crossfade 0–12s), `/` (Focus `#search-input`), `?` (Toggle `#shortcuts-modal`).
+  - **MediaSession API (`syncMediaSession`, `registerMediaSessionHandlers`)**:
+    - Syncs OS lockscreen / hardware media key metadata (`title`, `artist`, `album`, `artwork`), `playbackState`, `setPositionState`, and handlers for `play`, `pause`, `previoustrack`, `nexttrack`, `seekbackward`, `seekforward`, `seekto`, and `stop`.
+  - **Shell Helper Methods (`window.SpotTubeShell`)**:
+    - Added `getPlayerEngine`, `setCrossfadeDuration`, `cycleCrossfadeDuration`, `getCrossfadeDuration`, `toggleShortcutsModal`, `togglePlayPause`, `toggleShuffleState`, `toggleRepeatState`, `toggleLikeCurrentTrack`, `seekPlaybackTo`, `seekPlaybackBy`, `handleShellKeyDown`, and `syncCrossfadeUI`.
+- **Deferred / Not done yet**:
+  - Rich Artist, Album, and Song Detail Views (`#detail-view`) with top tracks, discography, "Similar in Your Library", and one-click "Start Mix" hero buttons is Item 8.
+- **Testing & verification**:
+  - Added `tests/player.test.js` and ran `npm test` (`node --test tests/*.test.js`): all 32 tests across 7 test files pass.
