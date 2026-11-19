@@ -12,7 +12,7 @@ We are transforming `/Users/iandodge/Documents/Spotify-UI-Clone` from a static H
 - [x] 1. Build the static-first catalog indexer & Vercel-ready manifest (`scripts/build-catalog.js`, `tracks.json`, `vercel.json`): scan `/songs` and `/Images` to generate a rich `tracks.json` manifest (title, parsed primary/featured artists, album, duration, genre, mood tags, BPM/energy/valence attributes, relative URLs) so the app works 100% statically on Vercel and locally on port 5500 without hardcoded `127.0.0.1` URLs.
 - [x] 2. Modernize the 3-pane Spotify + YT Music hybrid shell (`index.html`, `style.css`): full-viewport responsive layout with Left Library Sidebar, Center Main View (with top search bar, navigation history, and YT Music mood/activity filter chips), collapsible Right "Up Next / Radio Mix / Track Info" Drawer, and enhanced bottom Playbar.
 - [x] 3. Build the persistent user taste, telemetry & IndexedDB store (`storage.js`): track play counts, completion ratios, skip penalties (early skip vs late skip), likes/dislikes, recently played timestamps, custom playlists, local user-imported audio blobs (via IndexedDB), and real-time Web Audio API analyzer features (RMS energy, bass/treble spectral centroid) cached per track.
-- [ ] 4. Build the Hybrid Recommendation & Scoring Engine (`recommender.js`): combine artist/collaborator affinity, genre/album/era clustering, audio feature cosine similarity (energy, tempo, mood, spectral profile), Spotify-style user taste affinity (completion rate + likes - skip decay), and recency/variety anti-repetition penalties.
+- [x] 4. Build the Hybrid Recommendation & Scoring Engine (`recommender.js`): combine artist/collaborator affinity, genre/album/era clustering, audio feature cosine similarity (energy, tempo, mood, spectral profile), Spotify-style user taste affinity (completion rate + likes - skip decay), and recency/variety anti-repetition penalties.
 - [ ] 5. Implement the universal "Start Mix" Radio Generator & Queue Manager (`queue.js`): allow starting a nonstop radio mix from any single track, artist, album, mood chip, or active search result set, maintaining a live queue with manual reorder, "Play Next", "Add to Queue", and removal.
 - [ ] 6. Add YT Music Dynamic Mix Tuning Chips inside the "Up Next / Mix" drawer: allow switching the active radio mix mode on the fly between *All*, *Familiar*, *Discover*, *Deep Cuts*, *Upbeat*, and *Chill*, dynamically re-ranking and regenerating upcoming auto-queued tracks without interrupting current playback.
 - [ ] 7. Implement Continuous Nonstop Playback & Gapless/Crossfade Audio Engine (`player.js`): dual-deck HTML5 Audio + Web Audio API crossfader (configurable 0–12s crossfade), automatic endless queue replenishment when fewer than 3 tracks remain, keyboard shortcuts, and MediaSession API integration.
@@ -121,3 +121,34 @@ We are transforming `/Users/iandodge/Documents/Spotify-UI-Clone` from a static H
   - Universal "Start Mix" Radio Generator & Queue Manager (`queue.js`) is Item 5.
 - **Testing & verification**:
   - Added `tests/storage.test.js` and ran `npm test` (`node --test tests/*.test.js`): all 13 tests across 3 test files pass with 0 warnings.
+
+### 4. Hybrid Recommendation & Scoring Engine (`recommender.js`)
+- **Files created/updated**:
+  - `recommender.js` (universal browser `window.SpotTubeRecommender` + CommonJS `module.exports` multi-signal recommendation and scoring engine)
+  - `index.html` (loaded `<script src="recommender.js" defer></script>` after `storage.js` and before `script.js`)
+  - `script.js` (integrated `window.SpotTubeRecommender` into `getUpcomingQueueTracks()` and `renderDrawerQueue()` to rank the Up Next queue and display per-track recommendation match reasons and scores)
+  - `tests/recommender.test.js` (automated test suite covering artist/collaborator graph affinity, genre/album/era clustering, 8D audio feature cosine similarity + octave tempo harmony + live Web Audio analyzer cache integration, Spotify user taste affinity + artist generalization, recency/variety anti-repetition penalties, YT Music dynamic mix mode tuning, and shell integration)
+- **How it works & Key APIs for later steps (`window.SpotTubeRecommender`)**:
+  - **Core Weights (`DEFAULT_WEIGHTS`)**:
+    - `artistAffinity: 0.22`, `genreEraCluster: 0.22`, `audioSimilarity: 0.28`, `tasteAffinity: 0.28`.
+  - **Signal Functions**:
+    - `buildCollaboratorGraph(catalog)` -> returns `Map<normalizedArtist, Set<normalizedCollaborator>>` across primary and featured artists.
+    - `computeArtistCollaboratorAffinity(candidate, seedTracks, collaboratorGraph)` -> scores `1.0` (`"same-primary-artist"`), `0.86` (`"primary-featured-crossover"`), `0.76` (`"shared-featured-artist"`), or `0.56` (`"collaborator-network"` 1-hop graph neighbor).
+    - `computeGenreAlbumEraCluster(candidate, seedTracks)` -> combines exact/token genre match (`0.36`), subgenre Jaccard overlap (`0.24`), language match (`0.18`), Gaussian era proximity (`0.14`, $\sigma = 7$ years), and album match (`0.08`).
+    - `extractAudioFeatureVector(track, storage)` -> returns an 8D normalized vector `[energy, valence, danceability, acousticness, normalizedTempo, bassEnergy, trebleEnergy, spectralCentroidNormalized]`, merging static catalog features with live Web Audio API analyzer cache via `storage.getEffectiveAudioFeatures(track)`.
+    - `computeTempoHarmony(bpmA, bpmB)` -> evaluates both direct BPM proximity and octave/half-time/double-time harmonic locking (e.g. 81 BPM vs 162 BPM).
+    - `computeAudioFeatureSimilarity(candidate, seedTracks, storage)` -> combines 8D vector `cosineSimilarity` (`0.32`), perceptual L1 feature proximity (`0.34`), `tempoHarmony` (`0.16`), and mood tag overlap (`0.18`).
+    - `computeUserTasteScore(candidate, { storage, catalog, now })` -> combines `storage.computeTasteAffinity(trackId, now)` with artist-level taste generalization (`artistTasteBoost` in `[-0.10, +0.14]` when the user has liked or completed other songs by the candidate's artist) and an unplayed popularity prior.
+    - `computeVarietyAndRecencyPenalty(candidate, { storage, now, recentTrackIds, queueContext })` -> computes `recencyPenalty` (from `recentlyPlayed` position and exponential time decay `< 60 min`), `artistFatiguePenalty` (penalizing back-to-back same primary artist or repeated appearances in `queueContext`), and `albumClusterPenalty`.
+    - `computeMixModeAdjustment(candidate, signals, { mixMode, moodFilter, storage })` -> dynamically shifts scores for YT Music tuning modes: `"all"`, `"familiar"`, `"discover"`, `"deep-cuts"`, `"upbeat"`, and `"chill"`.
+  - **High-Level Ranking & Recommendation APIs (for Item 5 `queue.js`, Item 6 Mix Tuning, Item 8 Detail Views, Item 9 Search Mix, and Item 10 Smart Auto-Mixes)**:
+    - `resolveSeedTracks(catalog, seedSpec)` -> accepts a track object, track ID, array of tracks, `{ artist }`, `{ album }`, `{ mood }`, or `{ query }` and resolves the matching seed tracks.
+    - `scoreCandidate(candidate, context)` -> returns `{ trackId, track, totalScore, baseScore, mixMode, mixModeAdjustment, breakdown, reasons, primaryReason }`.
+    - `rankCandidates(catalog, options)` -> greedy variety-aware sequential ranker that updates `rollingQueueContext` after each pick so consecutive recommendations avoid artist/album streaks.
+    - `recommendTracks(catalog, options)` -> returns ordered track objects with `.recommendation` (`{ totalScore, breakdown, reasons, primaryReason, mixMode }`) attached.
+    - `getSimilarTracks(catalog, referenceTrackOrId, options)` -> convenience helper for Item 8 ("Similar in Your Library").
+- **Deferred / Not done yet**:
+  - Universal "Start Mix" Radio Generator & Queue Manager (`queue.js`) with manual reorder, "Play Next", "Add to Queue", and removal is Item 5.
+  - Dynamic Mix Tuning Chips live queue re-ranking without interrupting playback is Item 6.
+- **Testing & verification**:
+  - Added `tests/recommender.test.js` and ran `npm test` (`node --test tests/*.test.js`): all 20 tests across 4 test files pass.

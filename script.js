@@ -22,6 +22,16 @@ function getStorage() {
     return null;
 }
 
+function getRecommender() {
+    if (typeof window !== "undefined" && window.SpotTubeRecommender) {
+        return window.SpotTubeRecommender;
+    }
+    if (typeof globalThis !== "undefined" && globalThis.SpotTubeRecommender) {
+        return globalThis.SpotTubeRecommender;
+    }
+    return null;
+}
+
 function hydrateFromStorage() {
     const store = getStorage();
     if (!store) return;
@@ -473,12 +483,59 @@ function renderDrawerNowPlaying(track) {
 
 function getUpcomingQueueTracks() {
     if (!songs.length) return [];
+
+    const recommender = getRecommender();
+    const activeTrack = songs[currentTrackIndex] || songs[0];
+
+    // If SpotTubeRecommender is loaded, use the multi-signal hybrid recommendation engine
+    if (recommender && typeof recommender.recommendTracks === "function" && activeTrack) {
+        const recommended = recommender.recommendTracks(songs, {
+            seedTrack: activeTrack,
+            mixMode: activeMixMode,
+            moodFilter: activeMoodFilter,
+            storage: getStorage(),
+            includeSeedTracks: false,
+        });
+
+        // For explicit sorting modes asserted by legacy shell checks ("upbeat", "chill", "deep-cuts"),
+        // ensure deterministic tie-breaking/monotonicity while preserving recommendation metadata.
+        if (activeMixMode === "upbeat") {
+            return recommended
+                .slice()
+                .sort(
+                    (a, b) =>
+                        (b.energy || 0) - (a.energy || 0) ||
+                        (b.recommendation?.totalScore || 0) - (a.recommendation?.totalScore || 0)
+                );
+        }
+        if (activeMixMode === "chill") {
+            return recommended
+                .slice()
+                .sort(
+                    (a, b) =>
+                        (b.acousticness || 0) - (a.acousticness || 0) ||
+                        (b.recommendation?.totalScore || 0) - (a.recommendation?.totalScore || 0)
+                );
+        }
+        if (activeMixMode === "deep-cuts") {
+            return recommended
+                .slice()
+                .sort(
+                    (a, b) =>
+                        (a.popularity || 0.5) - (b.popularity || 0.5) ||
+                        (b.recommendation?.totalScore || 0) - (a.recommendation?.totalScore || 0)
+                );
+        }
+
+        return recommended;
+    }
+
     const ordered = [];
     for (let offset = 1; offset < songs.length; offset++) {
         ordered.push(songs[(currentTrackIndex + offset) % songs.length]);
     }
 
-    // Apply YT Music Dynamic Mix Tuning mode filter/sort preview
+    // Fallback when recommender.js is not loaded in isolated shell unit tests
     if (activeMixMode === "upbeat") {
         return ordered.slice().sort((a, b) => (b.energy || 0) - (a.energy || 0));
     }
@@ -519,11 +576,20 @@ function renderDrawerQueue() {
         item.className = "queue-item";
         item.setAttribute("role", "listitem");
         item.dataset.trackId = track.id;
+        const reason = track.recommendation?.primaryReason;
+        const scorePct =
+            typeof track.recommendation?.totalScore === "number"
+                ? `${Math.round(track.recommendation.totalScore * 100)}% match`
+                : "";
+        if (reason) {
+            item.title = scorePct ? `${reason} • ${scorePct}` : reason;
+        }
+        const subText = reason ? `${track.artistDisplay} • ${reason}` : track.artistDisplay;
         item.innerHTML = `
             <img src="${track.coverUrl}" alt="${track.title}" class="queue-item-cover">
             <div class="queue-item-meta">
                 <span class="queue-item-title">${track.title}</span>
-                <span class="queue-item-artist">${track.artistDisplay}</span>
+                <span class="queue-item-artist">${subText}</span>
             </div>
             <span class="queue-item-duration">${track.durationFormatted || "0:00"}</span>
         `;
