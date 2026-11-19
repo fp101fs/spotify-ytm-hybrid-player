@@ -7,6 +7,7 @@
     <title>SpotTube — Spotify + YT Music Hybrid Web Player</title>
     <link rel="shortcut icon" href="favicon.ico" type="image/x-icon">
     <script src="storage.js" defer></script>
+    <script src="library.js" defer></script>
     <script src="recommender.js" defer></script>
     <script src="queue.js" defer></script>
     <script src="player.js" defer></script>
@@ -105,6 +106,22 @@
                                     </div>
                                 </button>
                             </div>
+
+                            <!-- Local Files collection (Item 11) -->
+                            <div class="library-pinned-list" id="library-local-list">
+                                <button type="button" class="library-item pinned-item" id="lib-local-files" data-collection="local">
+                                    <div class="lib-item-art local-files-gradient">
+                                        <svg viewBox="0 0 16 16" fill="#fff" aria-hidden="true"><path d="M8 1a.75.75 0 0 1 .75.75v6.69l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.5 3.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 0 1 1.06-1.06l2.22 2.22V1.75A.75.75 0 0 1 8 1zm-5.5 11a.75.75 0 0 1 .75.75v1h9.5v-1a.75.75 0 0 1 1.5 0v1.75a.75.75 0 0 1-.75.75h-11a.75.75 0 0 1-.75-.75V12.75A.75.75 0 0 1 2.5 12z"/></svg>
+                                    </div>
+                                    <div class="lib-item-meta">
+                                        <span class="lib-item-title">Local Files</span>
+                                        <span class="lib-item-sub" id="lib-local-count">Drop MP3, FLAC or WAV to import</span>
+                                    </div>
+                                </button>
+                            </div>
+
+                            <!-- User Custom Playlists (Item 11) -->
+                            <div class="library-user-playlists" id="library-user-playlists" role="list" aria-label="Your Playlists"></div>
 
                             <!-- Dynamic Catalog List in Sidebar -->
                             <div class="library-tracks-list" id="library-tracks-list" aria-label="Library Items"></div>
@@ -344,6 +361,13 @@
                                         <span>+ Queue All</span>
                                     </button>
                                 </div>
+                                <div class="detail-collection-actions" id="detail-collection-actions" role="group" aria-label="Collection actions" hidden>
+                                    <button type="button" class="detail-row-btn" id="detail-edit-playlist-btn">Edit details</button>
+                                    <button type="button" class="detail-row-btn danger-btn" id="detail-delete-playlist-btn">Delete playlist</button>
+                                    <button type="button" class="detail-row-btn" id="detail-import-more-btn">Import files</button>
+                                    <button type="button" class="detail-row-btn" id="detail-import-folder-btn">Import folder</button>
+                                </div>
+                                <p class="detail-empty-hint" id="detail-empty-hint" hidden></p>
                             </div>
                         </header>
 
@@ -687,6 +711,9 @@
                     <button type="button" class="icon-btn like-btn" id="like-btn" aria-label="Like current track" aria-pressed="false" title="Save to Liked Songs">
                         <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1.69 2A4.582 4.582 0 0 1 8 2.023 4.583 4.583 0 0 1 11.88.817h.002a4.618 4.618 0 0 1 3.782 3.65v.003a4.543 4.543 0 0 1-1.011 3.84L9.35 14.629a1.765 1.765 0 0 1-2.093.464 1.762 1.762 0 0 1-.605-.463L1.348 8.309A4.582 4.582 0 0 1 1.689 2zm1.408 1.2a3.082 3.082 0 0 0-.24 4.153l5.143 6.086 5.142-6.086a3.043 3.043 0 0 0 .677-2.573 3.118 3.118 0 0 0-2.553-2.464 3.083 3.083 0 0 0-2.612.816l-.654.682-.655-.682a3.082 3.082 0 0 0-4.248.068z"/></svg>
                     </button>
+                    <button type="button" class="icon-btn playbar-add-playlist-btn" id="playbar-add-to-playlist-btn" aria-label="Add current track to a playlist" title="Add to playlist">
+                        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1 3.75A.75.75 0 0 1 1.75 3h9.5a.75.75 0 0 1 0 1.5h-9.5A.75.75 0 0 1 1 3.75zm0 4A.75.75 0 0 1 1.75 7h6.5a.75.75 0 0 1 0 1.5h-6.5A.75.75 0 0 1 1 7.75zm0 4a.75.75 0 0 1 .75-.75h4.5a.75.75 0 0 1 0 1.5h-4.5a.75.75 0 0 1-.75-.75zM12 8a.75.75 0 0 1 .75.75V11H15a.75.75 0 0 1 0 1.5h-2.25v2.25a.75.75 0 0 1-1.5 0V12.5H9a.75.75 0 0 1 0-1.5h2.25V8.75A.75.75 0 0 1 12 8z"/></svg>
+                    </button>
                     <button type="button" class="icon-btn playbar-mix-btn" id="playbar-mix-btn" aria-label="Start Radio Mix from current track" title="Start Radio Mix from this song">
                         <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 4a3 3 0 1 1 0 6 3 3 0 0 1 0-6z"/></svg>
                     </button>
@@ -791,6 +818,55 @@
                     <div class="shortcut-row"><kbd>/</kbd><span>Focus Omni-Search</span></div>
                     <div class="shortcut-row"><kbd>?</kbd><span>Shortcuts &amp; Audio Dialog</span></div>
                 </div>
+            </div>
+        </dialog>
+
+        <!-- ==================== LOCAL AUDIO IMPORT & PLAYLISTS (ITEM 11) ==================== -->
+        <input type="file" id="import-file-input" class="visually-hidden" multiple accept="audio/*,.mp3,.flac,.wav,.m4a,.ogg,.opus,.aac" tabindex="-1" aria-hidden="true">
+        <input type="file" id="import-folder-input" class="visually-hidden" multiple webkitdirectory directory tabindex="-1" aria-hidden="true">
+
+        <div class="drop-overlay" id="drop-overlay" hidden aria-hidden="true">
+            <div class="drop-overlay-card">
+                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a.75.75 0 0 1 .75.75v6.69l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.5 3.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 0 1 1.06-1.06l2.22 2.22V1.75A.75.75 0 0 1 8 1zm-5.5 11a.75.75 0 0 1 .75.75v1h9.5v-1a.75.75 0 0 1 1.5 0v1.75a.75.75 0 0 1-.75.75h-11a.75.75 0 0 1-.75-.75V12.75A.75.75 0 0 1 2.5 12z"/></svg>
+                <strong>Drop to import</strong>
+                <span>MP3, FLAC, WAV, M4A or OGG &mdash; files or whole folders. Stored only in this browser.</span>
+            </div>
+        </div>
+
+        <div class="library-toast" id="library-toast" role="status" aria-live="polite" hidden></div>
+
+        <dialog class="shortcuts-dialog playlist-dialog" id="playlist-edit-dialog" aria-labelledby="playlist-edit-title" hidden>
+            <form class="shortcuts-dialog-card playlist-dialog-card" id="playlist-edit-form" method="dialog">
+                <div class="shortcuts-dialog-header">
+                    <h2 id="playlist-edit-title">Edit details</h2>
+                    <button type="button" class="drawer-close-btn" id="playlist-edit-close-btn" aria-label="Close edit playlist dialog">&times;</button>
+                </div>
+                <label class="playlist-field">
+                    <span>Name</span>
+                    <input type="text" id="playlist-name-input" maxlength="80" required autocomplete="off">
+                </label>
+                <label class="playlist-field">
+                    <span>Description</span>
+                    <textarea id="playlist-desc-input" rows="3" maxlength="300" placeholder="Add an optional description"></textarea>
+                </label>
+                <div class="playlist-dialog-actions">
+                    <button type="button" class="hero-secondary-btn" id="playlist-edit-cancel-btn">Cancel</button>
+                    <button type="submit" class="hero-primary-btn" id="playlist-edit-save-btn">Save</button>
+                </div>
+            </form>
+        </dialog>
+
+        <dialog class="shortcuts-dialog playlist-dialog" id="playlist-picker-dialog" aria-labelledby="playlist-picker-title" hidden>
+            <div class="shortcuts-dialog-card playlist-dialog-card">
+                <div class="shortcuts-dialog-header">
+                    <div>
+                        <span class="hero-eyebrow" id="playlist-picker-track">ADD TO PLAYLIST</span>
+                        <h2 id="playlist-picker-title">Add to playlist</h2>
+                    </div>
+                    <button type="button" class="drawer-close-btn" id="playlist-picker-close-btn" aria-label="Close add to playlist dialog">&times;</button>
+                </div>
+                <button type="button" class="hero-primary-btn playlist-picker-new" id="playlist-picker-new-btn">+ New playlist</button>
+                <div class="playlist-picker-list" id="playlist-picker-list" role="list"></div>
             </div>
         </dialog>
     </div>

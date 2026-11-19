@@ -918,6 +918,15 @@
                 danceability: clamp(Number(trackMeta.danceability ?? 0.65), 0, 1),
                 acousticness: clamp(Number(trackMeta.acousticness ?? 0.3), 0, 1),
                 popularity: clamp(Number(trackMeta.popularity ?? 0.6), 0, 1),
+                audioFeatures:
+                    trackMeta.audioFeatures && typeof trackMeta.audioFeatures === "object"
+                        ? { ...trackMeta.audioFeatures }
+                        : undefined,
+                trackNumber: Number(trackMeta.trackNumber) || null,
+                format: trackMeta.format || "",
+                mimeType,
+                size,
+                hasEmbeddedCover: Boolean(trackMeta.hasEmbeddedCover),
                 isLocalImport: true,
                 createdAt: trackMeta.createdAt || now,
                 updatedAt: now,
