@@ -116,6 +116,8 @@
         return MIX_MODE_PROFILES[key] || MIX_MODE_PROFILES.all;
     }
 
+    const DEFAULT_GREEDY_LIMIT = 60;
+
     function clamp(value, min, max) {
         if (!Number.isFinite(value)) return min;
         return Math.max(min, Math.min(max, value));
@@ -598,6 +600,31 @@
     }
 
     /**
+     * Artist -> [{ id, contribution }] for tracks whose stats move artist-level taste (liked, completed,
+     * skipped). Built once per ranking call so computeUserTasteScore doesn't rescan the whole catalog
+     * for every candidate (that was O(n^2) and took seconds with a few hundred imported tracks).
+     */
+    function buildArtistTasteIndex(catalog = [], storage = null) {
+        const index = new Map();
+        if (!storage || typeof storage.getTrackStats !== "function") return index;
+        for (const track of catalog) {
+            if (!track) continue;
+            const stats = storage.getTrackStats(track.id);
+            let contribution = 0;
+            if (stats.liked) contribution += 0.08;
+            if (stats.fullCompletions > 0 && stats.avgCompletionRatio >= 0.8) contribution += 0.05;
+            if (stats.skipPenalty >= 0.35 && !stats.liked) contribution -= 0.05;
+            if (contribution === 0) continue;
+            const id = String(track.id);
+            for (const artist of new Set(getTrackArtists(track).map(normalizeString))) {
+                if (!index.has(artist)) index.set(artist, []);
+                index.get(artist).push({ id, contribution });
+            }
+        }
+        return index;
+    }
+
+    /**
      * 4. Spotify-Style User Taste Affinity [0..1]
      * Pulls from `storage.computeTasteAffinity(trackId, now)` and blends with artist-level taste
      * (if the user has liked or repeatedly completed other songs by the candidate's artist)
@@ -658,7 +685,17 @@
         // Artist-level taste generalization: if the user liked or completed other songs by this artist
         let artistTasteBoost = 0;
         const candArtists = new Set(getTrackArtists(candidate).map(normalizeString));
-        if (catalog.length > 0 && candArtists.size > 0) {
+        if (options.tasteIndex && candArtists.size > 0) {
+            // Precomputed per ranking call (see buildArtistTasteIndex): O(artist's tracks) instead of O(catalog)
+            const seen = new Set([String(candidate.id)]);
+            for (const artist of candArtists) {
+                for (const entry of options.tasteIndex.get(artist) || []) {
+                    if (seen.has(entry.id)) continue;
+                    seen.add(entry.id);
+                    artistTasteBoost += entry.contribution;
+                }
+            }
+        } else if (catalog.length > 0 && candArtists.size > 0) {
             for (const other of catalog) {
                 if (!other || other.id === candidate.id) continue;
                 const otherArtists = getTrackArtists(other).map(normalizeString);
@@ -700,6 +737,55 @@
     }
 
     /**
+     * Incremental summary of a queue context for computeVarietyAndRecencyPenalty's fast path.
+     * Call `push(track)` whenever a track is appended to the context.
+     */
+    function createVarietyIndex(queueContext = []) {
+        const index = {
+            length: 0,
+            keys: [],
+            primaryCounts: new Map(),
+            albumCounts: new Map(),
+            push(track) {
+                const key = {
+                    primary: normalizeString(track && track.primaryArtist),
+                    album: normalizeString(track && track.album),
+                    genre: normalizeString(track && track.genre),
+                    artists: new Set(getTrackArtists(track).map(normalizeString)),
+                };
+                index.keys.push(key);
+                index.length++;
+                if (track) {
+                    if (key.primary) index.primaryCounts.set(key.primary, (index.primaryCounts.get(key.primary) || 0) + 1);
+                    if (key.album) index.albumCounts.set(key.album, (index.albumCounts.get(key.album) || 0) + 1);
+                }
+            },
+        };
+        for (const t of queueContext) index.push(t);
+        return index;
+    }
+
+    function computeRecencyPenalty(candidate, recentTrackIds, storage, now) {
+        let recencyPenalty = 0;
+        const recentIdx = recentTrackIds.indexOf(String(candidate.id));
+        if (recentIdx !== -1) {
+            // Position 0 (just played) => ~0.34 penalty, decaying with position
+            recencyPenalty = Math.max(recencyPenalty, 0.34 * Math.pow(0.68, recentIdx));
+        }
+        if (storage && typeof storage.getTrackStats === "function") {
+            const stats = storage.getTrackStats(candidate.id);
+            if (stats && stats.lastPlayedAt && now >= stats.lastPlayedAt) {
+                const minutesSincePlay = (now - stats.lastPlayedAt) / (1000 * 60);
+                if (minutesSincePlay < 60) {
+                    const timePenalty = 0.28 * Math.exp(-minutesSincePlay / 15);
+                    recencyPenalty = Math.max(recencyPenalty, timePenalty);
+                }
+            }
+        }
+        return recencyPenalty;
+    }
+
+    /**
      * 5. Recency & Variety Anti-Repetition Penalty [0..0.75]
      * Penalizes:
      * - Tracks played very recently (exponential time decay + recent playback history index)
@@ -725,30 +811,45 @@
               : [];
         const queueContext = Array.isArray(options.queueContext) ? options.queueContext : [];
 
-        // 1. Recency penalty from recentlyPlayed order & timestamp
-        let recencyPenalty = 0;
-        const recentIdx = recentTrackIds.indexOf(String(candidate.id));
-        if (recentIdx !== -1) {
-            // Position 0 (just played) => ~0.34 penalty, decaying with position
-            recencyPenalty = Math.max(recencyPenalty, 0.34 * Math.pow(0.68, recentIdx));
-        }
-
-        if (storage && typeof storage.getTrackStats === "function") {
-            const stats = storage.getTrackStats(candidate.id);
-            if (stats && stats.lastPlayedAt && now >= stats.lastPlayedAt) {
-                const minutesSincePlay = (now - stats.lastPlayedAt) / (1000 * 60);
-                if (minutesSincePlay < 60) {
-                    const timePenalty = 0.28 * Math.exp(-minutesSincePlay / 15);
-                    recencyPenalty = Math.max(recencyPenalty, timePenalty);
-                }
-            }
+        // 1. Recency penalty from recentlyPlayed order & timestamp (cached per candidate within a ranking call)
+        const recencyCache = options.recencyCache;
+        let recencyPenalty = recencyCache ? recencyCache.get(candidate) : undefined;
+        if (recencyPenalty === undefined) {
+            recencyPenalty = computeRecencyPenalty(candidate, recentTrackIds, storage, now);
+            if (recencyCache) recencyCache.set(candidate, recencyPenalty);
         }
 
         // 2. Variety / anti-streak penalty relative to tracks already placed in the queue
         let artistFatiguePenalty = 0;
         let albumClusterPenalty = 0;
+        const varietyIndex = options.varietyIndex;
+        if (queueContext.length > 0 && varietyIndex && varietyIndex.length === queueContext.length) {
+            // Fast path (same result as the loop below): older queue entries all weigh the same, so
+            // per-artist / per-album counts plus the last two entries are enough. O(1) per candidate.
+            const candPrimary = normalizeString(candidate.primaryArtist);
+            const candAlbum = normalizeString(candidate.album);
+            const candGenre = normalizeString(candidate.genre);
+            const n = queueContext.length;
+            const last = varietyIndex.keys[n - 1];
+            const prevToLast = n > 1 ? varietyIndex.keys[n - 2] : null;
 
-        if (queueContext.length > 0) {
+            const sameArtistCount = candPrimary ? varietyIndex.primaryCounts.get(candPrimary) || 0 : 0;
+            artistFatiguePenalty += 0.05 * sameArtistCount;
+            if (candPrimary && last.primary === candPrimary) artistFatiguePenalty += 0.17;
+            if (candPrimary && prevToLast && prevToLast.primary === candPrimary) artistFatiguePenalty += 0.06;
+            const lastSharesPrimary = Boolean(candPrimary && last.primary === candPrimary);
+            if (!lastSharesPrimary && n > 1 && getTrackArtists(candidate).some((a) => last.artists.has(normalizeString(a)))) {
+                artistFatiguePenalty += 0.04;
+            }
+
+            const sameAlbumCount = candAlbum ? varietyIndex.albumCounts.get(candAlbum) || 0 : 0;
+            albumClusterPenalty += 0.06 * sameAlbumCount;
+            if (candAlbum && last.album === candAlbum) albumClusterPenalty += 0.08;
+            else if (candGenre && candGenre === last.genre) albumClusterPenalty += 0.03;
+
+            if (sameArtistCount >= 2) artistFatiguePenalty += 0.08 * (sameArtistCount - 1);
+            if (sameAlbumCount >= 2) albumClusterPenalty += 0.06;
+        } else if (queueContext.length > 0) {
             const candPrimary = normalizeString(candidate.primaryArtist);
             const candArtists = new Set(getTrackArtists(candidate).map(normalizeString));
             const candAlbum = normalizeString(candidate.album);
@@ -1066,7 +1167,9 @@
                 : globalScope && globalScope.SpotTubeStorage
                   ? globalScope.SpotTubeStorage
                   : null;
-        const seedTracks = resolveSeedTracks(catalog, context.seedTracks || context.seedTrack || context.seed);
+        const seedTracks =
+            context.resolvedSeedTracks ||
+            resolveSeedTracks(catalog, context.seedTracks || context.seedTrack || context.seed);
         const collaboratorGraph =
             context.collaboratorGraph || buildCollaboratorGraph(catalog);
         const mixMode = normalizeString(context.mixMode || "all");
@@ -1075,23 +1178,39 @@
             ...(context.weights && typeof context.weights === "object" ? context.weights : {}),
         };
 
-        const artistSignal = computeArtistCollaboratorAffinity(
-            candidate,
-            seedTracks,
-            collaboratorGraph
-        );
-        const clusterSignal = computeGenreAlbumEraCluster(candidate, seedTracks);
-        const audioSignal = computeAudioFeatureSimilarity(candidate, seedTracks, storage);
-        const tasteSignal = computeUserTasteScore(candidate, {
-            storage,
-            catalog,
-            now: context.now,
-        });
+        // Everything except the variety penalty is independent of the rolling queue context, so
+        // rankCandidates() passes a per-call cache and the greedy loop only recomputes variety.
+        const signalCache = context.signalCache;
+        let staticSignals = signalCache ? signalCache.get(candidate) : undefined;
+        if (!staticSignals) {
+            const artist = computeArtistCollaboratorAffinity(candidate, seedTracks, collaboratorGraph);
+            const cluster = computeGenreAlbumEraCluster(candidate, seedTracks);
+            const audio = computeAudioFeatureSimilarity(candidate, seedTracks, storage);
+            const taste = computeUserTasteScore(candidate, {
+                storage,
+                catalog,
+                now: context.now,
+                tasteIndex: context.tasteIndex,
+            });
+            const mixModeDelta = computeMixModeAdjustment(
+                candidate,
+                { artist, cluster, audio, taste },
+                { mixMode, moodFilter: context.moodFilter, storage }
+            );
+            staticSignals = { artist, cluster, audio, taste, mixModeDelta };
+            if (signalCache) signalCache.set(candidate, staticSignals);
+        }
+        const artistSignal = staticSignals.artist;
+        const clusterSignal = staticSignals.cluster;
+        const audioSignal = staticSignals.audio;
+        const tasteSignal = staticSignals.taste;
         const varietySignal = computeVarietyAndRecencyPenalty(candidate, {
             storage,
             now: context.now,
             recentTrackIds: context.recentTrackIds,
             queueContext: context.queueContext,
+            varietyIndex: context.varietyIndex,
+            recencyCache: context.recencyCache,
         });
 
         const signals = {
@@ -1102,11 +1221,7 @@
             variety: varietySignal,
         };
 
-        const mixModeDelta = computeMixModeAdjustment(candidate, signals, {
-            mixMode,
-            moodFilter: context.moodFilter,
-            storage,
-        });
+        const mixModeDelta = staticSignals.mixModeDelta;
 
         // Weighted base combination before penalties & mode adjustments
         const hasSeeds = seedTracks.length > 0;
@@ -1124,7 +1239,7 @@
             baseScore + mixModeDelta - varietySignal.penalty - dislikeSuppression;
         const totalScore = roundTo(clamp(rawTotal, 0, 1));
 
-        const reasons = buildRecommendationReasons(candidate, signals, mixMode);
+        const reasons = context.skipReasons ? [] : buildRecommendationReasons(candidate, signals, mixMode);
 
         return {
             trackId: candidate.id,
@@ -1195,6 +1310,9 @@
 
         const collaboratorGraph =
             options.collaboratorGraph || buildCollaboratorGraph(catalog);
+        // Taste is scored against a per-call artist index; static signals are cached per candidate (see scoreCandidate)
+        const tasteIndex = options.tasteIndex || buildArtistTasteIndex(catalog, storage);
+        const signalCache = new Map();
 
         const remainingPool = catalog.filter((t) => t && !excludeSet.has(String(t.id)));
         const targetCount = Number.isFinite(options.limit)
@@ -1208,24 +1326,69 @@
             : seedTracks.length > 0
               ? [seedTracks[0]]
               : [];
+        const varietyIndex = createVarietyIndex(rollingQueueContext);
+        const recencyCache = new Map();
+        const recentTrackIds = Array.isArray(options.recentTrackIds)
+            ? options.recentTrackIds.map(String)
+            : storage && typeof storage.getRecentlyPlayedTrackIds === "function"
+              ? storage.getRecentlyPlayedTrackIds(10)
+              : [];
 
         const selected = [];
         const available = remainingPool.slice();
 
-        while (selected.length < targetCount && available.length > 0) {
-            let bestIdx = 0;
-            let bestScored = null;
+        // Greedy variety-aware picking is O(picks x pool). Past `greedyLimit` picks (far down the queue,
+        // which is regenerated as it plays) the rest is ordered in one scored pass instead.
+        const greedyLimit = Number.isFinite(options.greedyLimit) ? Math.max(1, options.greedyLimit) : DEFAULT_GREEDY_LIMIT;
 
-            for (let i = 0; i < available.length; i++) {
-                const candidate = available[i];
-                const scored = scoreCandidate(candidate, {
+        while (selected.length < targetCount && available.length > 0) {
+            if (selected.length >= greedyLimit) {
+                const tailContext = {
                     ...options,
                     catalog,
                     storage,
                     seedTracks,
+                    resolvedSeedTracks: seedTracks,
                     collaboratorGraph,
+                    tasteIndex,
+                    signalCache,
+                    recencyCache,
+                    recentTrackIds,
                     queueContext: rollingQueueContext,
-                });
+                    varietyIndex,
+                };
+                const tail = available
+                    .map((candidate) => scoreCandidate(candidate, tailContext))
+                    .sort(
+                        (a, b) =>
+                            b.totalScore - a.totalScore ||
+                            (b.track.popularity || 0) - (a.track.popularity || 0)
+                    );
+                selected.push(...tail.slice(0, targetCount - selected.length));
+                break;
+            }
+            let bestIdx = 0;
+            let bestScored = null;
+
+            // One context per pick (not per candidate); reasons are built only for the chosen track
+            const pickContext = {
+                ...options,
+                catalog,
+                storage,
+                seedTracks,
+                resolvedSeedTracks: seedTracks,
+                collaboratorGraph,
+                tasteIndex,
+                signalCache,
+                recencyCache,
+                recentTrackIds,
+                queueContext: rollingQueueContext,
+                varietyIndex,
+                skipReasons: true,
+            };
+            for (let i = 0; i < available.length; i++) {
+                const candidate = available[i];
+                const scored = scoreCandidate(candidate, pickContext);
 
                 if (
                     !bestScored ||
@@ -1239,8 +1402,9 @@
             }
 
             const [chosenTrack] = available.splice(bestIdx, 1);
-            selected.push(bestScored);
+            selected.push(scoreCandidate(chosenTrack, { ...pickContext, skipReasons: false }));
             rollingQueueContext.push(chosenTrack);
+            varietyIndex.push(chosenTrack);
         }
 
         return selected;
@@ -1397,7 +1561,9 @@
         computeTempoHarmony,
         computeAudioFeatureSimilarity,
         computeUserTasteScore,
+        buildArtistTasteIndex,
         computeVarietyAndRecencyPenalty,
+        createVarietyIndex,
         computeMixModeAdjustment,
         resolveSeedTracks,
         scoreCandidate,

@@ -539,12 +539,12 @@ test("importLocalAudioFiles merges imports into the live catalog, opens Local Fi
         { probeDuration: noProbe }
     );
     assert.equal(result.added.length, 1);
-    assert.equal(result.summary, "Imported 1 track • 1 skipped");
+    assert.equal(result.summary, "Added 1 song · 1 skipped");
     assert.equal(shell.getState().songs.length, before + 1);
     const imported = result.added[0];
     assert.equal(imported.title, "Night Drive");
     assert.ok(shell.getImportedLocalTracks().some((t) => t.id === imported.id));
-    assert.equal(el("library-toast").textContent, "Imported 1 track • 1 skipped");
+    assert.equal(el("library-toast").textContent, "Added 1 song · 1 skipped");
     assert.match(el("lib-local-count").textContent, /1 file/);
 
     // Local Files collection view

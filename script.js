@@ -238,6 +238,7 @@ async function getSongs() {
                 const existingIds = new Set(baseTracks.map((t) => t.id));
                 for (const imp of imported) {
                     if (!existingIds.has(imp.id)) {
+                        useDisplayCover(imp);
                         baseTracks.push(imp);
                         existingIds.add(imp.id);
                     }
@@ -673,7 +674,7 @@ function renderCatalogGrid() {
     }
 
     const activeTrack = songs[currentTrackIndex];
-    const cardNodes = filteredTracks.map((track) => {
+    const makeCard = (track) => {
         const fullIdx = resolveTrackIndex(track);
         const card = document.createElement("div");
         card.classList.add("card");
@@ -768,9 +769,13 @@ function renderCatalogGrid() {
             playMusic(fullIdx, false);
         });
         return card;
-    });
+    };
 
-    songDiv.replaceChildren(...cardNodes);
+    renderInChunks(songDiv, filteredTracks, makeCard, {
+        chunk: 60,
+        stateId: "catalog-grid",
+        key: `${activeMoodFilter}|${activeSearchQuery}`,
+    });
 }
 
 function renderLibrarySidebar() {
@@ -779,6 +784,7 @@ function renderLibrarySidebar() {
 
     const activeTrack = songs[currentTrackIndex];
     const nodes = [];
+    let trackNodeFactory = null;
 
     if (activeLibraryFilter === "artists") {
         const seenArtists = new Map();
@@ -912,7 +918,7 @@ function renderLibrarySidebar() {
             nodes.push(btn);
         }
     } else {
-        for (const track of songs) {
+        trackNodeFactory = (track) => {
             const btn = document.createElement("button");
             btn.type = "button";
             btn.className = "library-item";
@@ -951,11 +957,15 @@ function renderLibrarySidebar() {
             btn.addEventListener("click", () => {
                 playMusic(track.id, false);
             });
-            nodes.push(btn);
-        }
+            return btn;
+        };
     }
 
-    listContainer.replaceChildren(...nodes);
+    if (trackNodeFactory) {
+        renderInChunks(listContainer, songs, trackNodeFactory, { chunk: 80, stateId: "library-tracks", key: "tracks" });
+    } else {
+        listContainer.replaceChildren(...nodes);
+    }
     renderUserPlaylistsSidebar();
 }
 
@@ -1453,10 +1463,10 @@ function renderDrawerQueue(options = {}) {
         return;
     }
 
-    const nodes = upcoming.map((track, idx) =>
-        createQueueItemNode(track, idx, upcoming.length)
-    );
-    queueList.replaceChildren(...nodes);
+    renderInChunks(queueList, upcoming, (track, idx) => createQueueItemNode(track, idx, upcoming.length), {
+        chunk: 50,
+        stateId: "queue-list",
+    });
 }
 
 function renderDrawerTrackInfo(track) {
@@ -1703,6 +1713,8 @@ function runMainViewTransition(updateFn, focusTargetId) {
 }
 
 function setHomeSectionsHidden(isHidden) {
+    homeSectionsHidden = Boolean(isHidden);
+    if (typeof updateHomeAddMusicCard === "function") updateHomeAddMusicCard();
     for (const id of ["hero-mix-banner", "home-shelves", "catalog-section"]) {
         const el = document.getElementById(id);
         if (el) {
@@ -2402,8 +2414,11 @@ function createDetailTrackRowNode(track, idx, rowOptions = {}) {
     const isLiked = likedTrackIds.has(track.id);
     const artists = getTrackArtistList(track);
 
-    row.className = isPlaying ? "detail-track-row active-track" : "detail-track-row";
+    // Item 13: rows from an instant import show shimmer placeholders until their tags are read
+    const isPending = track.importStatus === "pending";
+    row.className = `${isPlaying ? "detail-track-row active-track" : "detail-track-row"}${isPending ? " is-pending" : ""}`;
     row.setAttribute("role", "listitem");
+    if (isPending) row.setAttribute("aria-busy", "true");
     row.dataset.trackId = track.id;
     row.dataset.artist = track.primaryArtist;
     row.dataset.album = track.album;
@@ -2421,17 +2436,26 @@ function createDetailTrackRowNode(track, idx, rowOptions = {}) {
 
     row.innerHTML = `
         <span class="detail-track-num">${idx + 1}</span>
-        <img src="${track.coverUrl}" alt="${track.title}" class="detail-track-cover">
+        ${
+            isPending
+                ? `<span class="detail-track-cover import-shimmer" aria-hidden="true"></span>`
+                : `<img src="${track.coverUrl}" alt="${track.title}" class="detail-track-cover" loading="lazy" decoding="async">`
+        }
         <div class="detail-track-main">
             <div class="detail-track-title-row">
                 <span class="detail-track-title" data-open-song="${track.id}" title="Open Song Detail: ${track.title}">${track.title}</span>
                 ${matchBadgeHtml}
+                ${isPending ? `<span class="import-reading-tag">reading tags…</span>` : ""}
             </div>
             <div class="detail-track-artists">${artistButtonsHtml}</div>
         </div>
         <div class="detail-track-album-col">
-            <button type="button" class="detail-inline-link" data-open-album="${track.album}" title="Open Album: ${track.album}">${track.album}</button>
-            <span class="detail-track-telemetry">${track.genre || "Music"} &bull; ${track.bpm || 110} BPM &bull; ${Math.round((track.energy ?? 0.65) * 100)}% Energy</span>
+            ${
+                isPending
+                    ? `<span class="import-shimmer import-shimmer-line" aria-hidden="true"></span><span class="import-shimmer import-shimmer-line short" aria-hidden="true"></span>`
+                    : `<button type="button" class="detail-inline-link" data-open-album="${track.album}" title="Open Album: ${track.album}">${track.album}</button>
+            <span class="detail-track-telemetry">${track.genre || "Music"} &bull; ${track.bpm || 110} BPM &bull; ${Math.round((track.energy ?? 0.65) * 100)}% Energy</span>`
+            }
         </div>
         <div class="detail-track-actions" role="group" aria-label="Actions for ${track.title}">
             <button type="button" class="detail-row-btn ${isLiked ? "liked" : ""}" data-detail-track-action="like" aria-pressed="${isLiked}" title="Like ${track.title}">
@@ -2450,7 +2474,11 @@ function createDetailTrackRowNode(track, idx, rowOptions = {}) {
                 <span>+ Playlist</span>
             </button>
             ${buildCollectionRowActionsHtml(track, idx, collection)}
-            <span class="detail-track-duration">${track.durationFormatted || "0:00"}</span>
+            ${
+                isPending
+                    ? `<span class="detail-track-duration import-shimmer import-shimmer-dur" aria-hidden="true"></span>`
+                    : `<span class="detail-track-duration">${track.durationFormatted || "0:00"}</span>`
+            }
         </div>
     `;
 
@@ -2682,6 +2710,91 @@ function createDetailSimilarTrackCardNode(simTrack) {
     return card;
 }
 
+const DETAIL_TRACKLIST_CHUNK = 150;
+const chunkedListState = new Map(); // container id -> { key, rendered, observer }
+
+/**
+ * Renders `items` into `container` in chunks: the first chunk right away, the next ones as a sentinel
+ * after the last node nears the viewport (scrolling, or keyboard focus reaching the end). Big libraries
+ * (1,000+ songs) otherwise put ~100k nodes in the page and every layout / view transition froze it.
+ * Re-rendering with the same `key` keeps at least as many items as were shown before.
+ * Without IntersectionObserver everything renders at once.
+ */
+function renderInChunks(container, items, makeNode, options = {}) {
+    const chunk = Math.max(1, options.chunk || 100);
+    const stateId = container.id || options.stateId || "list";
+    const prev = chunkedListState.get(stateId);
+    if (prev && typeof prev.stop === "function") prev.stop();
+    const makeRange = (from, to) => items.slice(from, to).map((item, i) => makeNode(item, from + i));
+    const canChunk =
+        items.length > chunk &&
+        typeof IntersectionObserver === "function" &&
+        typeof container.append === "function";
+    const key = options.key || "";
+    let rendered = Math.min(
+        items.length,
+        canChunk && prev && key && prev.key === key ? Math.max(chunk, prev.rendered) : canChunk ? chunk : items.length
+    );
+    const state = { key, rendered, stop: null };
+    chunkedListState.set(stateId, state);
+    if (rendered >= items.length) {
+        container.replaceChildren(...makeRange(0, items.length));
+        return items.length;
+    }
+    const sentinel = document.createElement("div");
+    sentinel.className = "chunk-sentinel";
+    sentinel.setAttribute("aria-hidden", "true");
+    container.replaceChildren(...makeRange(0, rendered), sentinel);
+    const loadMore = () => {
+        if (rendered >= items.length) return;
+        const next = Math.min(items.length, rendered + chunk);
+        sentinel.before(...makeRange(rendered, next));
+        rendered = next;
+        state.rendered = rendered;
+        if (rendered >= items.length) stop();
+    };
+    const sentinelIsNear = () => {
+        if (!sentinel.isConnected || typeof sentinel.getBoundingClientRect !== "function") return false;
+        const r = sentinel.getBoundingClientRect();
+        const vh = (typeof window !== "undefined" && window.innerHeight) || 800;
+        const vw = (typeof window !== "undefined" && window.innerWidth) || 1200;
+        // above or inside the viewport (+800px): a jump to the end (End key, scrollbar drag) skips past it
+        return r.top < vh + 800 && r.left < vw + 800;
+    };
+    const observer = new IntersectionObserver(
+        (entries) => {
+            if (entries.some((e) => e.isIntersecting)) loadMore();
+        },
+        { rootMargin: "800px 800px" }
+    );
+    let scrollFrame = 0;
+    const onScroll = () => {
+        if (scrollFrame) return;
+        scrollFrame = requestAnimationFrame(() => {
+            scrollFrame = 0;
+            let guard = 0;
+            while (rendered < items.length && sentinelIsNear() && guard++ < 200) loadMore();
+        });
+    };
+    function stop() {
+        observer.disconnect();
+        if (typeof document.removeEventListener === "function") document.removeEventListener("scroll", onScroll, true);
+        if (sentinel.isConnected) sentinel.remove();
+        state.stop = null;
+    }
+    observer.observe(sentinel);
+    if (typeof document.addEventListener === "function") document.addEventListener("scroll", onScroll, { capture: true, passive: true });
+    state.stop = stop;
+    return rendered;
+}
+
+function renderDetailTracklistChunked(container, tracks, rowOptions = {}) {
+    return renderInChunks(container, tracks, (t, i) => createDetailTrackRowNode(t, i, rowOptions), {
+        chunk: DETAIL_TRACKLIST_CHUNK,
+        key: rowOptions.listKey || "",
+    });
+}
+
 function renderDetailView(detailData) {
     if (!detailData) return null;
     const detailView = document.getElementById("detail-view");
@@ -2869,10 +2982,10 @@ function renderDetailView(detailData) {
         topTracksCount.textContent = `${detailData.topTracks.length} ${detailData.topTracks.length === 1 ? "track" : "tracks"}`;
     }
     if (topTracksContainer) {
-        const rowNodes = (detailData.topTracks || []).map((t, i) =>
-            createDetailTrackRowNode(t, i, { collection: detailData.collection || null })
-        );
-        topTracksContainer.replaceChildren(...rowNodes);
+        renderDetailTracklistChunked(topTracksContainer, detailData.topTracks || [], {
+            collection: detailData.collection || null,
+            listKey: `${detailData.type}:${detailData.id}`,
+        });
     }
 
     // 2. Song Audio Profile & Taste Telemetry
@@ -2940,6 +3053,10 @@ function renderDetailView(detailData) {
 
 function openDetailView(spec = {}, options = {}) {
     if (!songs.length) return null;
+    // A fresh open starts the track list at its first chunk; only in-place refreshes keep the rows shown
+    const prevTracklist = chunkedListState.get("detail-top-tracks");
+    if (prevTracklist && typeof prevTracklist.stop === "function") prevTracklist.stop();
+    chunkedListState.delete("detail-top-tracks");
 
     let type = "artist";
     let target = null;
@@ -3042,6 +3159,7 @@ function openSongDetail(trackOrId, options = {}) {
 
 function closeDetailView(options = {}) {
     activeView = "home";
+    updateImportProgressUi();
     activeDetail = null;
 
     if (!options.skipHistory) {
@@ -4236,6 +4354,7 @@ function openSearchView(queryInput, options = {}) {
     }
 
     activeView = "search";
+    updateImportProgressUi();
     activeDetail = null;
 
     if (!options.skipHistory) {
@@ -4289,6 +4408,7 @@ function closeSearchView(options = {}) {
     }
 
     activeView = "home";
+    updateImportProgressUi();
     activeDetail = null;
 
     if (!options.skipHistory) {
@@ -6893,20 +7013,6 @@ function escapeHtml(value) {
         .replace(/'/g, "&#39;");
 }
 
-function showLibraryToast(message, options = {}) {
-    const toast = document.getElementById("library-toast");
-    if (!toast || !message) return;
-    toast.textContent = String(message);
-    toast.hidden = false;
-    toast.classList.toggle("is-error", Boolean(options.error));
-    if (libraryToastTimer && typeof clearTimeout === "function") clearTimeout(libraryToastTimer);
-    if (options.timeoutMs !== 0 && typeof setTimeout === "function") {
-        libraryToastTimer = setTimeout(() => {
-            toast.hidden = true;
-        }, options.timeoutMs || 4200);
-    }
-}
-
 function setDialogOpen(dialogEl, open) {
     if (!dialogEl) return;
     dialogEl.hidden = !open;
@@ -6974,45 +7080,108 @@ function mergeImportedTracks(tracks = []) {
     return added;
 }
 
-function refreshLibraryViews() {
+function refreshLibraryViews(options = {}) {
     const qm = getQueueManager();
     if (qm && typeof qm.setCatalog === "function" && songs.length) {
         qm.setCatalog(songs, { rebuildQueue: false, silent: true });
     }
     renderCatalogGrid();
-    renderHomeShelves();
+    // Home shelves run the recommender over the whole catalog; an instant import skips them until it finishes
+    if (!options.skipShelves) renderHomeShelves();
     renderLibrarySidebar();
     updateLocalFilesCount();
+    updateHomeAddMusicCard();
     refreshActiveCollectionView();
 }
 
 /**
- * Imports local audio files (File objects, { file, relativePath } entries, or a FileList) into IndexedDB
- * and merges them into the live catalog so they can be played, mixed, searched and added to playlists.
+ * Imports local audio files (File objects, { file, relativePath } entries, or a FileList).
+ * Item 13: rows appear immediately from file names (playable right away), then tags, duration and cover art
+ * fill in through a background worker pool. Resolves when every file has been read and saved.
  */
 async function importLocalAudioFiles(fileInputs, options = {}) {
     const lib = getLibraryModule();
-    if (!lib) return { imported: [], duplicates: [], skipped: [], summary: "Import unavailable" };
+    const empty = { imported: [], duplicates: [], skipped: [], removed: [], added: [] };
+    if (!lib) return { ...empty, summary: "Import unavailable" };
     const list = Array.isArray(fileInputs) ? fileInputs : Array.from(fileInputs || []);
-    if (!list.length) return { imported: [], duplicates: [], skipped: [], summary: "No files selected" };
+    if (!list.length) return { ...empty, summary: "No files selected" };
+    const sourceName = options.sourceName || lib.guessImportSourceName(list) || "your files";
 
-    showLibraryToast(`Importing ${list.length} ${list.length === 1 ? "file" : "files"}…`, { timeoutMs: 0 });
-    const result = await lib.importAudioFiles(list, {
+    const job = {
+        sourceName,
+        controller: null,
+        lastQuarter: 0,
+    };
+    const controller = lib.startInstantImport(list, {
         storage: getStorage(),
+        existingKeys: getExistingImportKeys(),
         existingIds: songs.map((t) => t.id),
-        onProgress: options.onProgress,
         probeDuration: options.probeDuration,
+        concurrency: options.concurrency,
+        onTrackUpdated: (track) => queueImportRowUpdate(track),
+        onTrackFailed: (track) => {
+            removeTracksFromCatalog([track.id]);
+            queueImportRowUpdate(null);
+        },
+        onProgress: () => scheduleImportFlush(),
     });
-    const added = mergeImportedTracks(result.imported);
-    const summary = lib.summarizeImportResult(result);
-    refreshLibraryViews();
-    showLibraryToast(summary, { error: added.length === 0 && result.skipped.length > 0 });
-    announceQueueStatus(summary);
+    job.controller = controller;
 
-    if (added.length > 0 && options.openCollection !== false) {
+    if (controller.total === 0) {
+        const result = {
+            imported: [],
+            duplicates: controller.duplicates,
+            skipped: controller.skipped,
+            removed: [],
+            cancelled: false,
+            total: 0,
+        };
+        const details = [...controller.skipped, ...controller.duplicates];
+        let summary;
+        if (controller.duplicates.length && !controller.skipped.length) {
+            summary = lib.summarizeInstantImport(result);
+            showLibraryToast(summary, { action: { label: "View details", onClick: () => openImportDetailsDialog(details) } });
+        } else {
+            summary = `No music found in “${sourceName}”. Supported formats: ${lib.SUPPORTED_FORMATS_LABEL}.`;
+            showLibraryToast(summary, {
+                error: true,
+                timeoutMs: 0,
+                action: details.length ? { label: "View details", onClick: () => openImportDetailsDialog(details) } : null,
+            });
+        }
+        return { ...result, added: [], summary };
+    }
+
+    activeImportJobs.push(job);
+    mergeImportedTracks(controller.tracks);
+    // Light refresh while the rows are new; the full refresh (grid, shelves, sidebar) runs when tags are done
+    const qmNow = getQueueManager();
+    if (qmNow && typeof qmNow.setCatalog === "function") qmNow.setCatalog(songs, { rebuildQueue: false, silent: true });
+    updateLocalFilesCount();
+    updateHomeAddMusicCard();
+    if (options.openCollection === false) refreshActiveCollectionView();
+    announceImport(`Adding ${controller.total} ${controller.total === 1 ? "song" : "songs"} from “${sourceName}”`);
+    if (options.openCollection !== false) {
         openLocalFilesDetail();
     }
-    return { ...result, added, summary };
+    updateImportProgressUi();
+
+    const result = await controller.done;
+    activeImportJobs = activeImportJobs.filter((j) => j !== job);
+    if (result.removed.length) removeTracksFromCatalog(result.removed.map((t) => t.id));
+    flushImportUpdates({ force: true });
+    refreshLibraryViews();
+    updateImportProgressUi();
+
+    const summary = lib.summarizeInstantImport(result);
+    const details = [...result.skipped, ...result.duplicates];
+    showLibraryToast(summary, {
+        error: result.imported.length === 0 && details.length > 0,
+        action: details.length ? { label: "View details", onClick: () => openImportDetailsDialog(details) } : null,
+    });
+    // The toast (role="status") announces the finish; the import live region only did start + quarters
+    importLastQuarter = 0;
+    return { ...result, added: result.imported, summary };
 }
 
 async function importFromDataTransfer(dataTransfer, options = {}) {
@@ -7022,16 +7191,47 @@ async function importFromDataTransfer(dataTransfer, options = {}) {
     return importLocalAudioFiles(entries, options);
 }
 
+/** True where the browser can pick a whole folder (desktop Chrome/Edge/Firefox/Safari; not iOS or most Android browsers). */
+function canPickFolders() {
+    if (typeof window === "undefined") return false;
+    const nav = window.navigator || {};
+    const ua = String(nav.userAgent || "");
+    const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(ua) || (/Macintosh/.test(ua) && Number(nav.maxTouchPoints) > 1);
+    if (isMobile) return false;
+    if (typeof window.showDirectoryPicker === "function") return true;
+    const input = document.getElementById("import-folder-input");
+    return Boolean(input && ("webkitdirectory" in input || input.webkitdirectory !== undefined));
+}
+
+function showFolderPermissionError() {
+    const message = "Couldn't open that folder because the browser didn't allow access.";
+    showLibraryToast(message, {
+        error: true,
+        timeoutMs: 0,
+        action: { label: "Try again", onClick: () => openImportPicker({ folder: true }) },
+    });
+    announceImport(message);
+}
+
 function openImportPicker(options = {}) {
-    const wantsFolder = Boolean(options.folder);
+    const wantsFolder = Boolean(options.folder) && canPickFolders();
     if (wantsFolder && typeof window !== "undefined" && typeof window.showDirectoryPicker === "function") {
         const lib = getLibraryModule();
+        let pickedName = "";
         return window
             .showDirectoryPicker({ id: "spottube-import", mode: "read" })
-            .then((handle) => lib.collectFilesFromDirectoryHandle(handle))
-            .then((entries) => importLocalAudioFiles(entries))
+            .then((handle) => {
+                pickedName = handle && handle.name ? String(handle.name) : "";
+                return lib.collectFilesFromDirectoryHandle(handle);
+            })
+            .then((entries) => importLocalAudioFiles(entries, { sourceName: pickedName || undefined }))
             .catch((err) => {
-                if (err && err.name === "AbortError") return null;
+                const name = err && err.name;
+                if (name === "AbortError") return null; // picker cancelled: nothing happens
+                if (name === "NotAllowedError" || name === "SecurityError") {
+                    showFolderPermissionError();
+                    return null;
+                }
                 // Fall back to the <input webkitdirectory> picker
                 const folderInput = document.getElementById("import-folder-input");
                 if (folderInput && typeof folderInput.click === "function") folderInput.click();
@@ -7198,7 +7398,11 @@ function buildCollectionDetailData(spec = {}) {
         mixLabel = "Start Liked Mix";
         emptyHint = "Songs you like will appear here. Tap ♡ on any song or press F while it plays.";
     } else {
-        tracks = getImportedLocalTracks();
+        // Newest first, so a folder being added shows at the top of the list while its tags fill in
+        tracks = getImportedLocalTracks()
+            .map((t, i) => [t, i])
+            .sort((a, b) => (Number(b[0].createdAt) || 0) - (Number(a[0].createdAt) || 0) || a[1] - b[1])
+            .map(([t]) => t);
         id = "local";
         title = "Local Files";
         description = "Audio imported from your device. Stored only in this browser (IndexedDB).";
@@ -7206,7 +7410,7 @@ function buildCollectionDetailData(spec = {}) {
         eyebrow = "IMPORTED IN THIS BROWSER";
         tracklistTitle = "Imported Files";
         mixLabel = "Start Local Mix";
-        emptyHint = "Drag MP3, FLAC or WAV files (or whole folders) anywhere onto the app, or use Import files.";
+        emptyHint = "Use “+ Add Music” to pick a folder or files, or drag MP3, FLAC or WAV files (or whole folders) anywhere onto the app.";
     }
 
     const totalDuration = tracks.reduce((sum, t) => sum + Number(t.duration || 0), 0);
@@ -7229,10 +7433,15 @@ function buildCollectionDetailData(spec = {}) {
     // "Recommended" songs to add, seeded by the collection (or the current track when empty)
     let similarTracks = [];
     const seedTracks = tracks.length ? tracks : [songs[currentTrackIndex] || songs[0]].filter(Boolean);
+    // Audio similarity is O(seeds x catalog); a big Local Files collection uses an even sample as seeds
+    const recSeeds =
+        seedTracks.length > 24
+            ? Array.from({ length: 24 }, (_, i) => seedTracks[Math.floor((i * seedTracks.length) / 24)])
+            : seedTracks;
     if (recommender && typeof recommender.recommendTracks === "function" && seedTracks.length) {
         try {
             similarTracks = recommender.recommendTracks(songs, {
-                seed: seedTracks,
+                seed: recSeeds,
                 excludeTrackIds: tracks.map((t) => t.id),
                 includeSeedTracks: false,
                 limit: 6,
@@ -7330,13 +7539,14 @@ function renderDetailCollectionChrome(detailData) {
     if (editBtn) editBtn.hidden = detailData.type !== "playlist";
     if (deleteBtn) deleteBtn.hidden = detailData.type !== "playlist";
     if (importBtn) importBtn.hidden = detailData.type !== "local";
-    if (importFolderBtn) importFolderBtn.hidden = detailData.type !== "local";
+    if (importFolderBtn) importFolderBtn.hidden = detailData.type !== "local" || importFolderBtn.dataset.unsupported === "true";
     if (emptyHint) {
         const showHint = isCollection && detailData.trackCount === 0;
         emptyHint.hidden = !showHint;
         emptyHint.textContent = showHint ? detailData.emptyHint || "" : "";
     }
     if (discographySection) discographySection.hidden = isCollection;
+    updateImportProgressUi();
     if (similarSection) similarSection.hidden = isCollection && !(detailData.similarTracks || []).length;
 }
 
@@ -7534,18 +7744,19 @@ function initLibraryImportControls() {
     const onInputChange = (e) => {
         const files = Array.from(e.target?.files || []);
         if (files.length) importLocalAudioFiles(files);
+        if (e.target) e.target.value = ""; // picking the same folder again still fires "change"
     };
     if (fileInput) fileInput.addEventListener("change", onInputChange);
     if (folderInput) folderInput.addEventListener("change", onInputChange);
 
-    for (const id of ["import-audio-btn", "sidebar-import-audio-cta", "detail-import-more-btn"]) {
+    for (const id of ["sidebar-import-audio-cta", "detail-import-more-btn"]) {
         const el = document.getElementById(id);
         if (el) el.addEventListener("click", () => openImportPicker());
     }
     const folderBtn = document.getElementById("detail-import-folder-btn");
     if (folderBtn) folderBtn.addEventListener("click", () => openImportPicker({ folder: true }));
 
-    for (const id of ["create-playlist-btn", "sidebar-create-playlist-cta"]) {
+    for (const id of ["sidebar-create-playlist-cta"]) {
         const el = document.getElementById(id);
         if (el) el.addEventListener("click", () => createUserPlaylist());
     }
@@ -7632,11 +7843,517 @@ function initLibraryImportControls() {
         importFromDataTransfer(e.dataTransfer);
     });
 
+    initAddMusicControls();
     renderUserPlaylistsSidebar();
     updateLocalFilesCount();
 }
 
+// ---------- Item 13: instant import progress, batched row updates, Add Music menu ----------
+
+const displayCoverUrlCache = new Map();
+
+/**
+ * Embedded covers are stored as data: URLs (they persist in IndexedDB). Rendering hundreds of 30 KB-1 MB
+ * base64 strings through innerHTML froze the page, so tracks display a blob: URL instead, one per distinct
+ * image (an album's tracks share it). The data: URL stays on `coverDataUrl` for anything that needs it.
+ */
+function useDisplayCover(track) {
+    if (!track || typeof track.coverUrl !== "string") return track;
+    const url = track.coverUrl;
+    if (!url.startsWith("data:image/") || url.startsWith("data:image/svg")) return track;
+    if (typeof URL === "undefined" || typeof URL.createObjectURL !== "function" || typeof Blob === "undefined" || typeof atob !== "function") {
+        return track;
+    }
+    let blobUrl = displayCoverUrlCache.get(url);
+    if (!blobUrl) {
+        try {
+            const comma = url.indexOf(",");
+            const mime = url.slice(5, url.indexOf(";")) || "image/jpeg";
+            const binary = atob(url.slice(comma + 1));
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+            blobUrl = URL.createObjectURL(new Blob([bytes], { type: mime }));
+            displayCoverUrlCache.set(url, blobUrl);
+        } catch (_) {
+            return track;
+        }
+    }
+    track.coverDataUrl = url;
+    track.coverUrl = blobUrl;
+    return track;
+}
+
+let activeImportJobs = [];
+let importFlushScheduled = false;
+let importRowsNeedRebuild = false;
+let importLastQuarter = 0;
+let libraryToastTimeoutMs = 4200;
+let importDetailsReturnFocus = null;
+let homeSectionsHidden = false;
+const pendingImportRowUpdates = new Map();
+const addMusicMenuState = { open: false, anchor: null };
+
+function getExistingImportKeys() {
+    const lib = getLibraryModule();
+    if (!lib || typeof lib.importFileKey !== "function") return [];
+    return getImportedLocalTracks()
+        .filter((t) => t.filename)
+        .map((t) => t.importKey || lib.importFileKey(t.filename, t.size));
+}
+
+/** Removes tracks from the live catalog (and upcoming queue) while keeping the playing track's index right. */
+function removeTracksFromCatalog(trackIds = []) {
+    const ids = new Set(trackIds);
+    if (!ids.size) return;
+    const qm = getQueueManager();
+    if (qm && typeof qm.removeFromQueue === "function") {
+        try {
+            const upcoming = typeof qm.getUpcomingTracks === "function" ? qm.getUpcomingTracks() : [];
+            for (const t of upcoming) if (ids.has(t.id)) qm.removeFromQueue(t.id);
+        } catch (_) {}
+    }
+    const activeId = songs[currentTrackIndex]?.id;
+    songs = songs.filter((t) => !ids.has(t.id));
+    const nextIndex = songs.findIndex((t) => t.id === activeId);
+    currentTrackIndex = nextIndex >= 0 ? nextIndex : Math.min(currentTrackIndex, Math.max(0, songs.length - 1));
+    importRowsNeedRebuild = true;
+}
+
+function queueImportRowUpdate(track) {
+    if (track) useDisplayCover(track);
+    if (track && track.id) pendingImportRowUpdates.set(track.id, track);
+    scheduleImportFlush();
+}
+
+/** Batches re-renders to one per animation frame (setTimeout fallback) no matter how many tags finish. */
+function scheduleImportFlush() {
+    if (importFlushScheduled) return;
+    importFlushScheduled = true;
+    const run = () => flushImportUpdates();
+    if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+        window.requestAnimationFrame(run);
+    } else if (typeof setTimeout === "function") {
+        setTimeout(run, 32);
+    } else {
+        run();
+    }
+}
+
+function cssEscapeValue(value) {
+    if (typeof CSS !== "undefined" && CSS && typeof CSS.escape === "function") return CSS.escape(value);
+    return String(value).replace(/["\\]/g, "\\$&");
+}
+
+/** Swaps updated rows in place in Local Files so scroll position and keyboard focus survive tag updates. */
+function patchLocalFileRows(tracks) {
+    const container = document.getElementById("detail-top-tracks");
+    if (!container || typeof container.querySelector !== "function") return false;
+    const collection = (activeDetail && activeDetail.data && activeDetail.data.collection) || { type: "local", id: "local" };
+    const active = typeof document !== "undefined" ? document.activeElement : null;
+    for (const track of tracks) {
+        const row = container.querySelector(`[data-track-id="${cssEscapeValue(track.id)}"]`);
+        if (!row || !row.parentNode || typeof row.replaceWith !== "function") continue;
+        const idx = Array.prototype.indexOf.call(container.children, row);
+        const next = createDetailTrackRowNode(track, Math.max(0, idx), { collection });
+        const hadFocus = active && typeof row.contains === "function" && row.contains(active);
+        const focusAction = hadFocus && active.dataset ? active.dataset.detailTrackAction : "";
+        row.replaceWith(next);
+        if (hadFocus) {
+            const target =
+                (focusAction && next.querySelector(`[data-detail-track-action="${focusAction}"]`)) ||
+                next.querySelector("button") ||
+                next;
+            if (target && typeof target.focus === "function") target.focus({ preventScroll: true });
+        }
+    }
+    return true;
+}
+
+function flushImportUpdates(options = {}) {
+    importFlushScheduled = false;
+    const updated = Array.from(pendingImportRowUpdates.values());
+    pendingImportRowUpdates.clear();
+    const onLocalFiles = activeView === "detail" && activeDetail && activeDetail.type === "local";
+    if (onLocalFiles && !options.force) {
+        if (importRowsNeedRebuild) {
+            importRowsNeedRebuild = false;
+            refreshActiveCollectionView();
+        } else if (updated.length) {
+            patchLocalFileRows(updated);
+        }
+    } else if (options.force) {
+        importRowsNeedRebuild = false;
+    }
+    updateLocalFilesCount();
+    updateImportProgressUi();
+}
+
+function getImportTotals() {
+    let completed = 0;
+    let total = 0;
+    for (const job of activeImportJobs) {
+        completed += job.controller.completed;
+        total += job.controller.total;
+    }
+    return { completed, total };
+}
+
+function announceImport(message) {
+    const live = document.getElementById("import-live");
+    if (!live || !message) return;
+    live.textContent = "";
+    live.textContent = String(message);
+}
+
+/** Progress header in Local Files + the pill above the playbar + polite announcements about every 25%. */
+function updateImportProgressUi() {
+    const running = activeImportJobs.length > 0;
+    const { completed, total } = getImportTotals();
+    const latest = activeImportJobs[activeImportJobs.length - 1];
+    const onLocalFiles = activeView === "detail" && activeDetail && activeDetail.type === "local";
+    const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+    const label = running ? `Adding “${latest.sourceName}” · ${completed} of ${total}` : "";
+
+    const header = document.getElementById("import-progress");
+    if (header) header.hidden = !(running && onLocalFiles);
+    const headerLabel = document.getElementById("import-progress-label");
+    if (headerLabel) headerLabel.textContent = label;
+
+    for (const id of ["import-progress-bar", "import-pill-bar"]) {
+        const bar = document.getElementById(id);
+        if (!bar) continue;
+        bar.setAttribute("aria-valuemin", "0");
+        bar.setAttribute("aria-valuemax", String(Math.max(total, 1)));
+        bar.setAttribute("aria-valuenow", String(completed));
+        bar.setAttribute("aria-valuetext", `${completed} of ${total} songs`);
+        const fill = bar.querySelector ? bar.querySelector(".import-progress-fill") : null;
+        if (fill && fill.style) fill.style.width = `${pct}%`;
+    }
+
+    const pill = document.getElementById("import-progress-pill");
+    const pillVisible = running && !onLocalFiles;
+    if (pill) pill.hidden = !pillVisible;
+    const pillLabel = document.getElementById("import-pill-label");
+    if (pillLabel) pillLabel.textContent = running ? `Adding songs · ${completed} of ${total}` : "";
+    if (document.body && document.body.classList) document.body.classList.toggle("has-import-pill", pillVisible);
+
+    if (running && total > 0) {
+        const quarter = Math.floor((completed / total) * 4);
+        if (quarter > importLastQuarter && quarter < 4) {
+            importLastQuarter = quarter;
+            announceImport(`${quarter * 25}% added · ${completed} of ${total} songs`);
+        }
+    } else {
+        importLastQuarter = 0;
+    }
+}
+
+function cancelActiveImports() {
+    if (!activeImportJobs.length) return false;
+    for (const job of activeImportJobs) job.controller.cancel();
+    announceImport("Stopping the import…");
+    return true;
+}
+
+function hideLibraryToast() {
+    const toast = document.getElementById("library-toast");
+    if (toast) toast.hidden = true;
+    if (libraryToastTimer && typeof clearTimeout === "function") clearTimeout(libraryToastTimer);
+    libraryToastTimer = null;
+}
+
+function startLibraryToastTimer() {
+    if (libraryToastTimer && typeof clearTimeout === "function") clearTimeout(libraryToastTimer);
+    libraryToastTimer = null;
+    if (libraryToastTimeoutMs > 0 && typeof setTimeout === "function") {
+        libraryToastTimer = setTimeout(hideLibraryToast, libraryToastTimeoutMs);
+    }
+}
+
+/**
+ * Status toast (role="status"). options: { error, timeoutMs (0 = stays until dismissed), action: { label, onClick } }.
+ * Toasts with an action stay longer and pause while hovered or focused.
+ */
+function showLibraryToast(message, options = {}) {
+    const toast = document.getElementById("library-toast");
+    if (!toast || !message) return;
+    toast.textContent = String(message);
+    toast.hidden = false;
+    toast.classList.toggle("is-error", Boolean(options.error));
+    const action = options.action && options.action.label && typeof options.action.onClick === "function" ? options.action : null;
+    const persistent = options.timeoutMs === 0;
+    if (action && typeof toast.append === "function") {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "library-toast-action";
+        btn.textContent = action.label;
+        btn.addEventListener("click", () => {
+            hideLibraryToast();
+            action.onClick();
+        });
+        toast.append(btn);
+    }
+    if (persistent && typeof toast.append === "function") {
+        const close = document.createElement("button");
+        close.type = "button";
+        close.className = "library-toast-close";
+        close.setAttribute("aria-label", "Dismiss message");
+        close.textContent = "×";
+        close.addEventListener("click", () => hideLibraryToast());
+        toast.append(close);
+    }
+    libraryToastTimeoutMs = persistent ? 0 : options.timeoutMs || (action ? 10000 : 4200);
+    startLibraryToastTimer();
+}
+
+function openImportDetailsDialog(entries = []) {
+    const dialog = document.getElementById("import-details-dialog");
+    const list = document.getElementById("import-details-list");
+    const count = document.getElementById("import-details-count");
+    if (!dialog || !list) return false;
+    const active = document.activeElement;
+    const toast = document.getElementById("library-toast");
+    importDetailsReturnFocus =
+        active && active !== document.body && !(toast && typeof toast.contains === "function" && toast.contains(active))
+            ? active
+            : document.getElementById("lib-local-files");
+    const nodes = entries.map((entry) => {
+        const li = document.createElement("li");
+        li.className = "import-details-item";
+        const name = document.createElement("span");
+        name.className = "import-details-name";
+        name.textContent = entry.relativePath || entry.name || "file";
+        const reason = document.createElement("span");
+        reason.className = "import-details-reason";
+        reason.textContent = entry.reason || "Skipped";
+        li.append(name);
+        li.append(reason);
+        return li;
+    });
+    list.replaceChildren(...nodes);
+    if (count) count.textContent = `${entries.length} ${entries.length === 1 ? "file wasn't" : "files weren't"} added`;
+    setDialogOpen(dialog, true);
+    const closeBtn = document.getElementById("import-details-close-btn");
+    if (closeBtn && typeof closeBtn.focus === "function") closeBtn.focus();
+    return true;
+}
+
+function closeImportDetailsDialog() {
+    setDialogOpen(document.getElementById("import-details-dialog"), false);
+    const target = importDetailsReturnFocus;
+    importDetailsReturnFocus = null;
+    if (target && target.isConnected !== false && typeof target.focus === "function") target.focus();
+}
+
+// Add Music menu: "+ Add Music" in the left nav and the "+" (Create) in Your Library share one menu.
+
+function getAddMusicMenuItems() {
+    const menu = document.getElementById("add-music-menu");
+    if (!menu || typeof menu.querySelectorAll !== "function") return [];
+    return Array.from(menu.querySelectorAll('[role="menuitem"]')).filter((el) => !el.hidden);
+}
+
+function isSheetLayout() {
+    return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(max-width: 740px)").matches;
+}
+
+function openAddMusicMenu(anchor, options = {}) {
+    const menu = document.getElementById("add-music-menu");
+    if (!menu || !anchor) return false;
+    if (addMusicMenuState.open) closeAddMusicMenu({ returnFocus: false });
+    const playlistItem = document.getElementById("add-music-playlist-item");
+    if (playlistItem) playlistItem.hidden = !options.withPlaylist;
+    const title = document.getElementById("add-music-menu-title");
+    if (title) title.textContent = options.withPlaylist ? "Create" : "Add music";
+    if (anchor.id) menu.setAttribute("aria-labelledby", anchor.id);
+    menu.hidden = false;
+    const backdrop = document.getElementById("add-music-backdrop");
+    if (backdrop) backdrop.hidden = !isSheetLayout();
+    anchor.setAttribute("aria-expanded", "true");
+    addMusicMenuState.open = true;
+    addMusicMenuState.anchor = anchor;
+
+    if (menu.style) {
+        if (isSheetLayout() || typeof anchor.getBoundingClientRect !== "function") {
+            menu.style.top = "";
+            menu.style.left = "";
+        } else {
+            const rect = anchor.getBoundingClientRect();
+            const vw = window.innerWidth || 1024;
+            const vh = window.innerHeight || 768;
+            const width = menu.offsetWidth || 260;
+            const height = menu.offsetHeight || 180;
+            const top = rect.bottom + 6 + height > vh ? Math.max(8, rect.top - height - 6) : rect.bottom + 6;
+            menu.style.top = `${Math.round(top)}px`;
+            menu.style.left = `${Math.round(Math.max(8, Math.min(rect.left, vw - width - 8)))}px`;
+        }
+    }
+    const items = getAddMusicMenuItems();
+    const first = items[0];
+    if (first && typeof first.focus === "function") first.focus();
+    return true;
+}
+
+function closeAddMusicMenu(options = {}) {
+    const menu = document.getElementById("add-music-menu");
+    const anchor = addMusicMenuState.anchor;
+    if (menu) menu.hidden = true;
+    const backdrop = document.getElementById("add-music-backdrop");
+    if (backdrop) backdrop.hidden = true;
+    if (anchor) anchor.setAttribute("aria-expanded", "false");
+    addMusicMenuState.open = false;
+    addMusicMenuState.anchor = null;
+    if (options.returnFocus !== false && anchor && typeof anchor.focus === "function") anchor.focus();
+}
+
+function runAddMusicAction(action) {
+    closeAddMusicMenu({ returnFocus: true });
+    if (action === "folder") return openImportPicker({ folder: true });
+    if (action === "files") return openImportPicker({ folder: false });
+    if (action === "playlist") return createUserPlaylist();
+    return null;
+}
+
+function handleAddMusicMenuKeydown(e) {
+    const items = getAddMusicMenuItems();
+    if (!items.length) return;
+    const current = items.indexOf(document.activeElement);
+    let next = -1;
+    if (e.key === "ArrowDown") next = current < 0 ? 0 : (current + 1) % items.length;
+    else if (e.key === "ArrowUp") next = current <= 0 ? items.length - 1 : current - 1;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = items.length - 1;
+    else if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        closeAddMusicMenu({ returnFocus: true });
+        return;
+    } else if (e.key === "Tab") {
+        e.preventDefault();
+        closeAddMusicMenu({ returnFocus: true });
+        return;
+    }
+    if (next >= 0) {
+        e.preventDefault();
+        items[next].focus();
+    }
+}
+
+function updateHomeAddMusicCard() {
+    const card = document.getElementById("home-add-music-card");
+    if (!card) return;
+    card.hidden = homeSectionsHidden || getImportedLocalTracks().length > 0;
+}
+
+function applyFolderPickingSupport() {
+    const folders = canPickFolders();
+    const folderItem = document.getElementById("add-music-folder-item");
+    if (folderItem) folderItem.hidden = !folders;
+    const note = document.getElementById("add-music-folder-note");
+    if (note) note.hidden = folders;
+    const dragHint = document.getElementById("add-music-hint");
+    if (dragHint) dragHint.hidden = !folders;
+    const detailFolderBtn = document.getElementById("detail-import-folder-btn");
+    if (detailFolderBtn) detailFolderBtn.dataset.unsupported = folders ? "false" : "true";
+    const homeBtn = document.getElementById("home-add-music-btn");
+    if (homeBtn) {
+        homeBtn.textContent = folders ? "Add a folder…" : "Add files…";
+        homeBtn.dataset.addMusic = folders ? "folder" : "files";
+    }
+    return folders;
+}
+
+function initAddMusicControls() {
+    applyFolderPickingSupport();
+    const menu = document.getElementById("add-music-menu");
+    const toggle = (anchor, opts) => {
+        if (addMusicMenuState.open && addMusicMenuState.anchor === anchor) closeAddMusicMenu({ returnFocus: true });
+        else openAddMusicMenu(anchor, opts);
+    };
+    const navBtn = document.getElementById("add-music-btn");
+    if (navBtn) navBtn.addEventListener("click", () => toggle(navBtn, { withPlaylist: false }));
+    const createBtn = document.getElementById("create-playlist-btn");
+    if (createBtn) createBtn.addEventListener("click", () => toggle(createBtn, { withPlaylist: true }));
+    const mobileBtn = document.getElementById("mobile-add-music-btn");
+    if (mobileBtn) mobileBtn.addEventListener("click", () => toggle(mobileBtn, { withPlaylist: false }));
+    for (const btn of [navBtn, createBtn, mobileBtn]) {
+        if (!btn) continue;
+        btn.addEventListener("keydown", (e) => {
+            if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                e.preventDefault();
+                openAddMusicMenu(btn, { withPlaylist: btn === createBtn });
+                if (e.key === "ArrowUp") {
+                    const items = getAddMusicMenuItems();
+                    if (items.length) items[items.length - 1].focus();
+                }
+            }
+        });
+    }
+    if (menu) {
+        menu.addEventListener("keydown", handleAddMusicMenuKeydown);
+        if (typeof menu.querySelectorAll === "function") {
+            for (const item of Array.from(menu.querySelectorAll('[role="menuitem"]'))) {
+                item.addEventListener("click", () => runAddMusicAction(item.dataset.addMusic));
+            }
+        }
+    }
+    const backdrop = document.getElementById("add-music-backdrop");
+    if (backdrop) backdrop.addEventListener("click", () => closeAddMusicMenu({ returnFocus: true }));
+    document.addEventListener("pointerdown", (e) => {
+        if (!addMusicMenuState.open) return;
+        const target = e.target;
+        const anchor = addMusicMenuState.anchor;
+        if (menu && typeof menu.contains === "function" && menu.contains(target)) return;
+        if (anchor && typeof anchor.contains === "function" && anchor.contains(target)) return;
+        closeAddMusicMenu({ returnFocus: false });
+    });
+
+    const homeBtn = document.getElementById("home-add-music-btn");
+    if (homeBtn) homeBtn.addEventListener("click", () => openImportPicker({ folder: homeBtn.dataset.addMusic !== "files" }));
+
+    const pill = document.getElementById("import-progress-pill");
+    if (pill) pill.addEventListener("click", () => openLocalFilesDetail());
+    const cancelBtn = document.getElementById("import-cancel-btn");
+    if (cancelBtn) cancelBtn.addEventListener("click", () => cancelActiveImports());
+
+    const toast = document.getElementById("library-toast");
+    if (toast) {
+        const pause = () => {
+            if (libraryToastTimer && typeof clearTimeout === "function") clearTimeout(libraryToastTimer);
+            libraryToastTimer = null;
+        };
+        toast.addEventListener("mouseenter", pause);
+        toast.addEventListener("focusin", pause);
+        toast.addEventListener("mouseleave", () => startLibraryToastTimer());
+        toast.addEventListener("focusout", () => startLibraryToastTimer());
+    }
+
+    const detailsClose = document.getElementById("import-details-close-btn");
+    if (detailsClose) detailsClose.addEventListener("click", () => closeImportDetailsDialog());
+    const detailsDialog = document.getElementById("import-details-dialog");
+    if (detailsDialog) {
+        detailsDialog.addEventListener("close", () => {
+            detailsDialog.hidden = true;
+            if (importDetailsReturnFocus) closeImportDetailsDialog();
+        });
+    }
+    updateHomeAddMusicCard();
+}
+
 window.SpotTubeShell = {
+    canPickFolders,
+    renderInChunks,
+    useDisplayCover,
+    openAddMusicMenu,
+    closeAddMusicMenu,
+    runAddMusicAction,
+    cancelActiveImports,
+    flushImportUpdates,
+    updateImportProgressUi,
+    openImportDetailsDialog,
+    closeImportDetailsDialog,
+    showLibraryToast,
+    getActiveImportJobs: () => activeImportJobs.slice(),
     toggleLikeTrackById,
     importLocalAudioFiles,
     importFromDataTransfer,

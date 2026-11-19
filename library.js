@@ -463,7 +463,7 @@
     };
     const MPEG_SAMPLE_RATES = { 3: [44100, 48000, 32000], 2: [22050, 24000, 16000], 0: [11025, 12000, 8000] };
 
-    function parseMp3Stream(input, startOffset = 0) {
+    function parseMp3Stream(input, startOffset = 0, totalBytes = 0) {
         const bytes = toUint8Array(input);
         const scanLimit = Math.min(bytes.length - 4, startOffset + 64 * 1024);
         for (let i = startOffset; i < scanLimit; i++) {
@@ -490,7 +490,8 @@
                 const frames = readUint32BE(bytes, xingOffset + 8);
                 duration = (frames * samplesPerFrame) / sampleRate;
             } else {
-                const audioBytes = bytes.length - i;
+                // totalBytes lets a partial read (file.slice) estimate CBR duration from the real file size
+                const audioBytes = Math.max(bytes.length, Number(totalBytes) || 0) - i;
                 duration = (audioBytes * 8) / (bitrateKbps * 1000);
             }
             return { bitrateKbps, sampleRate, duration };
@@ -552,7 +553,7 @@
         return data.length ? { mime, pictureType, data } : null;
     }
 
-    function parseFlac(input) {
+    function parseFlac(input, totalBytes = 0) {
         const bytes = toUint8Array(input);
         let offset = 0;
         if (readAscii(bytes, 0, 3) === "ID3") {
@@ -574,7 +575,7 @@
                 result.sampleRate = sampleRate;
                 if (sampleRate > 0 && totalSamples > 0) {
                     result.duration = totalSamples / sampleRate;
-                    result.bitrateKbps = Math.round((bytes.length * 8) / result.duration / 1000);
+                    result.bitrateKbps = Math.round((Math.max(bytes.length, Number(totalBytes) || 0) * 8) / result.duration / 1000);
                 }
             } else if (blockType === 4) {
                 Object.assign(result.tags, parseVorbisComments(block));
@@ -632,7 +633,8 @@
      * Parses tags + technical info from raw audio bytes.
      * Returns { format, tags: { title, artist, albumArtist, album, year, genre, track, bpm, picture }, duration, sampleRate, bitrateKbps }.
      */
-    function parseAudioMetadata(input, filename = "") {
+    function parseAudioMetadata(input, filename = "", options = {}) {
+        const fileSize = Number(options && options.fileSize) || 0;
         const bytes = toUint8Array(input);
         const ext = getFileExtension(filename);
         const empty = { format: ext || "unknown", tags: {}, duration: 0, sampleRate: 0, bitrateKbps: 0 };
@@ -643,13 +645,13 @@
                 const wav = parseWav(bytes);
                 if (wav) return { format: "wav", ...wav };
             }
-            const flac = parseFlac(bytes);
+            const flac = parseFlac(bytes, fileSize);
             if (flac) return { format: "flac", ...flac };
 
             const id3 = parseId3v2(bytes);
             const v1 = parseId3v1(bytes);
             const tags = { ...(v1 || {}), ...Object.fromEntries(Object.entries(id3.tags || {}).filter(([, v]) => v)) };
-            const mp3 = parseMp3Stream(bytes, id3.tagSize);
+            const mp3 = parseMp3Stream(bytes, id3.tagSize, fileSize);
             let duration = mp3 ? mp3.duration : 0;
             if (tags.lengthMs && Number(tags.lengthMs) > 0) {
                 duration = Number(tags.lengthMs) / 1000;
@@ -799,7 +801,10 @@
         if (bpm >= 120 && !moods.includes("Upbeat")) moods.push("Upbeat");
         if (profile.energy <= 0.4 && !moods.includes("Chill")) moods.push("Chill");
 
-        const id = `local-${slugify(`${title}-${primaryArtist}`) || "track"}-${(hashString(fileKey) % 0xfffff).toString(36)}`;
+        // Instant import passes the placeholder's id so a track keeps one id while its tags fill in
+        const id =
+            (fileInfo.id && String(fileInfo.id)) ||
+            `local-${slugify(`${title}-${primaryArtist}`) || "track"}-${(hashString(fileKey) % 0xfffff).toString(36)}`;
 
         const audioFeatures = {
             bpm,
@@ -869,9 +874,15 @@
             if (file) out.push({ file, relativePath: `${prefix}${file.name}` });
         } else if (entry.isDirectory && typeof entry.createReader === "function") {
             const children = await readAllDirectoryEntries(entry.createReader());
-            for (const child of children) {
-                await collectFromEntry(child, `${prefix}${entry.name}/`, out, depth + 1);
-            }
+            // Resolve siblings in parallel (one entry.file() round-trip each), then append in order
+            const parts = await Promise.all(
+                children.map(async (child) => {
+                    const part = [];
+                    await collectFromEntry(child, `${prefix}${entry.name}/`, part, depth + 1);
+                    return part;
+                })
+            );
+            for (const part of parts) out.push(...part);
         }
     }
 
@@ -885,9 +896,14 @@
             .map((item) => (typeof item.webkitGetAsEntry === "function" ? item.webkitGetAsEntry() : null));
         if (entries.length && entries.every(Boolean)) {
             // Entries must be captured synchronously above, before any await
-            for (const entry of entries) {
-                await collectFromEntry(entry, "", out, 0);
-            }
+            const parts = await Promise.all(
+                entries.map(async (entry) => {
+                    const part = [];
+                    await collectFromEntry(entry, "", part, 0);
+                    return part;
+                })
+            );
+            for (const part of parts) out.push(...part);
             return out;
         }
         for (const file of Array.from(dataTransfer.files || [])) {
@@ -900,14 +916,21 @@
     async function collectFilesFromDirectoryHandle(handle, prefix = "", depth = 0) {
         const out = [];
         if (!handle || depth > 12 || typeof handle.values !== "function") return out;
+        const pending = [];
         for await (const child of handle.values()) {
+            // Start every getFile() / sub-folder walk right away; await them together, keeping order
             if (child.kind === "file") {
-                const file = await child.getFile();
-                out.push({ file, relativePath: `${prefix}${handle.name}/${file.name}` });
+                pending.push(
+                    Promise.resolve(child.getFile()).then(
+                        (file) => [{ file, relativePath: `${prefix}${handle.name}/${file.name}` }],
+                        () => []
+                    )
+                );
             } else if (child.kind === "directory") {
-                out.push(...(await collectFilesFromDirectoryHandle(child, `${prefix}${handle.name}/`, depth + 1)));
+                pending.push(collectFilesFromDirectoryHandle(child, `${prefix}${handle.name}/`, depth + 1));
             }
         }
+        for (const part of await Promise.all(pending)) out.push(...part);
         return out;
     }
 
@@ -1036,6 +1059,329 @@
         return result;
     }
 
+    // ==================== INSTANT IMPORT (ITEM 13) ====================
+    //
+    // Phase 1 (synchronous): every supported file becomes a playable placeholder track built from its file name
+    // and folder path, with a session blob: URL. Phase 2 (background): a small worker pool reads only the bytes
+    // the tags need (file.slice), fills in tags / duration / cover art, and persists each track to IndexedDB.
+
+    const TAG_HEAD_BYTES = 64 * 1024;
+    const MAX_TAG_BYTES = 12 * 1024 * 1024; // larger ID3 tags / FLAC blocks are not read (huge embedded art)
+    const DEFAULT_IMPORT_CONCURRENCY = 4;
+    const SUPPORTED_FORMATS_LABEL = "MP3, FLAC, WAV, M4A, OGG, OPUS and AAC";
+
+    function concatBytes(parts) {
+        const list = parts.filter((p) => p && p.length);
+        const total = list.reduce((sum, p) => sum + p.length, 0);
+        const out = new Uint8Array(total);
+        let offset = 0;
+        for (const p of list) {
+            out.set(p, offset);
+            offset += p.length;
+        }
+        return out;
+    }
+
+    /** Reads bytes [start, end) of a File/Blob with file.slice() so only that range is loaded. */
+    async function readFileRange(file, start, end) {
+        const size = Number(file && file.size) || 0;
+        const s = clamp(Math.floor(start), 0, size);
+        const e = clamp(Math.floor(end), s, size);
+        if (e <= s) return new Uint8Array(0);
+        if (typeof file.slice === "function") {
+            const part = file.slice(s, e);
+            if (part && typeof part.arrayBuffer === "function") return new Uint8Array(await part.arrayBuffer());
+            if (part) return toUint8Array(await readFileBytes(part));
+        }
+        // Objects without slice() (test doubles): read everything, then cut the range out
+        return toUint8Array(await readFileBytes(file)).subarray(s, e);
+    }
+
+    function importFileKey(name, size) {
+        return `${sanitizeTagText(name, 240).toLowerCase()}|${Number(size) || 0}`;
+    }
+
+    async function compactFlac(head, start, size, read) {
+        const parts = [head.subarray(start, start + 4)];
+        let offset = start + 4;
+        let isLast = false;
+        let guard = 0;
+        while (!isLast && offset + 4 <= size && guard++ < 128) {
+            const header = offset + 4 <= head.length ? head.subarray(offset, offset + 4) : await read(offset, offset + 4);
+            if (header.length < 4) break;
+            isLast = (header[0] & 0x80) !== 0;
+            const type = header[0] & 0x7f;
+            const length = (header[1] << 16) | (header[2] << 8) | header[3];
+            if ((type === 0 || type === 4 || type === 6) && length <= MAX_TAG_BYTES) {
+                const end = offset + 4 + length;
+                const block = end <= head.length ? head.subarray(offset + 4, end) : await read(offset + 4, end);
+                parts.push(Uint8Array.of(type, header[1], header[2], header[3]), block);
+            }
+            offset += 4 + length;
+        }
+        if (parts.length > 1) {
+            // flag the last kept block so the parser stops there
+            const lastHeaderIndex = parts.length - 2;
+            parts[lastHeaderIndex] = Uint8Array.from(parts[lastHeaderIndex]);
+            parts[lastHeaderIndex][0] |= 0x80;
+        }
+        return concatBytes(parts);
+    }
+
+    async function compactWav(head, size, read) {
+        const parts = [head.subarray(0, 12)];
+        let dataHeader = null;
+        let offset = 12;
+        let guard = 0;
+        while (offset + 8 <= size && guard++ < 128) {
+            const header = offset + 8 <= head.length ? head.subarray(offset, offset + 8) : await read(offset, offset + 8);
+            if (header.length < 8) break;
+            const id = readAscii(header, 0, 4);
+            const length = readUint32LE(header, 4);
+            if (id === "data") {
+                dataHeader = Uint8Array.from(header); // the size is all we need; skip the audio itself
+            } else if ((id === "fmt " || id === "LIST") && length <= MAX_TAG_BYTES) {
+                const end = offset + 8 + length;
+                const body = end <= head.length ? head.subarray(offset + 8, end) : await read(offset + 8, end);
+                parts.push(header, body);
+                if (length % 2) parts.push(Uint8Array.of(0));
+            }
+            offset += 8 + length + (length % 2);
+        }
+        if (dataHeader) parts.push(dataHeader); // keep "data" last so the parser doesn't jump past later chunks
+        return concatBytes(parts);
+    }
+
+    /**
+     * Reads only the bytes the tag parsers need: the ID3v2 tag plus the first MP3 frames, the last 128 bytes
+     * (ID3v1), FLAC metadata blocks (STREAMINFO / VORBIS_COMMENT / PICTURE) or WAV fmt/LIST chunks + data header.
+     * Returns { bytes, fileSize, bytesRead } where `bytes` is a compact buffer parseAudioMetadata() understands.
+     */
+    async function readTagBytes(file) {
+        const size = Number(file && file.size) || 0;
+        let bytesRead = 0;
+        const read = async (start, end) => {
+            const chunk = await readFileRange(file, start, end);
+            bytesRead += chunk.length;
+            return chunk;
+        };
+        if (size <= TAG_HEAD_BYTES * 2) {
+            const all = await read(0, size);
+            return { bytes: all, fileSize: size, bytesRead };
+        }
+        let head = await read(0, TAG_HEAD_BYTES);
+        if (readAscii(head, 0, 4) === "RIFF" && readAscii(head, 8, 4) === "WAVE") {
+            return { bytes: await compactWav(head, size, read), fileSize: size, bytesRead };
+        }
+        let tagSize = 0;
+        if (readAscii(head, 0, 3) === "ID3" && head.length >= 10) {
+            const hasFooter = head[3] === 4 && (head[5] & 0x10) !== 0;
+            tagSize = 10 + readSyncSafe(head, 6) + (hasFooter ? 10 : 0);
+            const want = Math.min(size, Math.min(tagSize, MAX_TAG_BYTES) + TAG_HEAD_BYTES / 2);
+            if (want > head.length) {
+                head = concatBytes([head, await read(head.length, want)]);
+            }
+        }
+        if (readAscii(head, tagSize, 4) === "fLaC") {
+            const flac = await compactFlac(head, tagSize, size, read);
+            return { bytes: flac, fileSize: size, bytesRead };
+        }
+        const tail = await read(size - 128, size);
+        const bytes = readAscii(tail, 0, 3) === "TAG" ? concatBytes([head, tail]) : head;
+        return { bytes, fileSize: size, bytesRead };
+    }
+
+    /** Tags + duration for one file, reading only the tag bytes; falls back to a media-element probe for duration. */
+    async function readAudioMetadataFromFile(file, options = {}) {
+        const probe = options.probeDuration === undefined ? probeDurationWithMediaElement : options.probeDuration;
+        const { bytes, fileSize, bytesRead } = await readTagBytes(file);
+        const parsed = parseAudioMetadata(bytes, String(file.name || ""), { fileSize });
+        if (!(parsed.duration > 0) && typeof probe === "function") {
+            parsed.duration = (await probe(file)) || 0;
+        }
+        return { parsed, bytesRead };
+    }
+
+    /** Runs `worker(item)` over `items` with at most `concurrency` in flight; stops picking new items once `isCancelled()`. */
+    async function runWithConcurrency(items, worker, concurrency = DEFAULT_IMPORT_CONCURRENCY, isCancelled = () => false) {
+        let next = 0;
+        const lanes = Math.max(1, Math.min(Number(concurrency) || 1, items.length));
+        const lane = async () => {
+            while (next < items.length && !isCancelled()) {
+                const item = items[next++];
+                await worker(item);
+            }
+        };
+        await Promise.all(Array.from({ length: lanes }, lane));
+    }
+
+    /** "Album Folder" for a picked/dropped folder, the file name for one file, else "N files". */
+    function guessImportSourceName(input) {
+        const items = normalizeFileInputs(input);
+        if (!items.length) return "";
+        const roots = new Set(
+            items.map(({ relativePath }) => {
+                const parts = String(relativePath || "").split("/").filter(Boolean);
+                return parts.length > 1 ? parts[0] : "";
+            })
+        );
+        if (roots.size === 1) {
+            const [root] = roots;
+            if (root) return sanitizeTagText(root, 80);
+        }
+        if (items.length === 1) return sanitizeTagText(items[0].file.name, 80);
+        return `${items.length} files`;
+    }
+
+    /**
+     * Starts an instant import. Returns synchronously with the placeholder tracks (playable right away) and a
+     * `done` promise that resolves when every file's tags are read and persisted:
+     *   { tracks, skipped, duplicates, total, completed, cancel(), done }
+     * options: { storage, existingKeys, existingIds, concurrency, probeDuration, createObjectUrl,
+     *            onTrackUpdated(track), onTrackFailed(track, reason), onProgress({ completed, total }) }
+     * `done` resolves to { imported, duplicates, skipped, removed, cancelled, total }.
+     */
+    function startInstantImport(input, options = {}) {
+        const storage = options.storage === undefined ? (globalScope && globalScope.SpotTubeStorage) || null : options.storage;
+        const probe = options.probeDuration === undefined ? probeDurationWithMediaElement : options.probeDuration;
+        const URLApi = globalScope && globalScope.URL;
+        const makeUrl =
+            typeof options.createObjectUrl === "function"
+                ? options.createObjectUrl
+                : (file) => (URLApi && typeof URLApi.createObjectURL === "function" ? URLApi.createObjectURL(file) : "");
+        const existingKeys = new Set(options.existingKeys ? Array.from(options.existingKeys) : []);
+        const existingIds = new Set(options.existingIds ? Array.from(options.existingIds) : []);
+        const emit = (name, ...args) => {
+            if (typeof options[name] === "function") {
+                try {
+                    options[name](...args);
+                } catch (_) {}
+            }
+        };
+
+        const tracks = [];
+        const skipped = [];
+        const duplicates = [];
+        const jobs = [];
+        const batchCreatedAt = Date.now(); // one timestamp per batch keeps folder order in "newest first" lists
+        for (const { file, relativePath } of normalizeFileInputs(input)) {
+            const name = String(file.name || "file");
+            const entry = { name: sanitizeTagText(name, 240), relativePath: sanitizeTagText(relativePath || name, 400) };
+            if (/^\./.test(name)) {
+                skipped.push({ ...entry, reason: "Hidden file" });
+                continue;
+            }
+            if (!isSupportedAudioFile(file)) {
+                skipped.push({ ...entry, reason: `Not a supported audio format (${SUPPORTED_FORMATS_LABEL})` });
+                continue;
+            }
+            if (file.size > MAX_FILE_BYTES) {
+                skipped.push({ ...entry, reason: "File is larger than 400 MB" });
+                continue;
+            }
+            const info = { name, relativePath, size: file.size, type: file.type, lastModified: file.lastModified };
+            const key = importFileKey(name, file.size);
+            const placeholder = buildImportedTrackMeta(info, {});
+            if (existingKeys.has(key) || existingIds.has(placeholder.id)) {
+                duplicates.push({ ...entry, reason: "Already in your library" });
+                continue;
+            }
+            existingKeys.add(key);
+            existingIds.add(placeholder.id);
+            let audioUrl = "";
+            try {
+                audioUrl = makeUrl(file) || "";
+            } catch (_) {}
+            Object.assign(placeholder, {
+                audioUrl: audioUrl || `blob:spottube-local/${encodeURIComponent(placeholder.id)}`,
+                importStatus: "pending",
+                importKey: key,
+                duration: 0,
+                durationFormatted: "",
+                createdAt: batchCreatedAt,
+            });
+            tracks.push(placeholder);
+            jobs.push({ file, info, track: placeholder });
+        }
+
+        let cancelled = false;
+        let completed = 0;
+        const imported = [];
+        const failed = [];
+        const controller = {
+            tracks,
+            skipped,
+            duplicates,
+            total: jobs.length,
+            get completed() {
+                return completed;
+            },
+            get cancelled() {
+                return cancelled;
+            },
+            cancel() {
+                cancelled = true;
+            },
+            done: null,
+        };
+
+        const processJob = async (job) => {
+            if (cancelled) return;
+            const fileInfo = { ...job.info, id: job.track.id };
+            let meta;
+            try {
+                const { parsed } = await readAudioMetadataFromFile(job.file, { probeDuration: probe });
+                meta = buildImportedTrackMeta(fileInfo, parsed);
+            } catch (_) {
+                meta = buildImportedTrackMeta(fileInfo, {}); // unreadable tags: keep the file-name metadata
+            }
+            if (cancelled) return;
+            try {
+                if (storage && typeof storage.saveImportedTrack === "function") {
+                    const stored = await storage.saveImportedTrack({ ...meta, createdAt: job.track.createdAt }, job.file);
+                    meta = { ...meta, ...stored };
+                }
+            } catch (err) {
+                const reason = `Could not be saved in this browser (${(err && err.message) || err})`;
+                failed.push({ name: sanitizeTagText(job.info.name, 240), relativePath: sanitizeTagText(job.info.relativePath, 400), reason });
+                job.track.importStatus = "failed";
+                completed++;
+                emit("onTrackFailed", job.track, reason);
+                emit("onProgress", { completed, total: jobs.length });
+                return;
+            }
+            // Keep the placeholder's session URL so a row that is already playing isn't reloaded
+            const audioUrl = job.track.audioUrl;
+            Object.assign(job.track, meta, { audioUrl, importStatus: "ready", importKey: job.track.importKey });
+            imported.push(job.track);
+            completed++;
+            emit("onTrackUpdated", job.track);
+            emit("onProgress", { completed, total: jobs.length });
+        };
+
+        controller.done = (async () => {
+            await Promise.resolve(); // let the caller render the placeholders first
+            await runWithConcurrency(jobs, processJob, options.concurrency || DEFAULT_IMPORT_CONCURRENCY, () => cancelled);
+            const removed = jobs.filter((j) => j.track.importStatus === "pending").map((j) => j.track);
+            return { imported, duplicates, skipped: skipped.concat(failed), removed, cancelled, total: jobs.length };
+        })();
+        return controller;
+    }
+
+    /** Toast text for a finished instant import, e.g. "Added 498 songs · 2 skipped". */
+    function summarizeInstantImport(result = {}) {
+        const added = (result.imported || []).length;
+        const skippedCount = (result.skipped || []).length + (result.duplicates || []).length;
+        const songsLabel = (n) => `${n} ${n === 1 ? "song" : "songs"}`;
+        if (result.cancelled) {
+            return `Stopped · added ${added} of ${songsLabel(result.total || added)}`;
+        }
+        if (!added) {
+            return skippedCount ? `Nothing new to add · ${skippedCount} skipped` : "No music found";
+        }
+        return skippedCount ? `Added ${songsLabel(added)} · ${skippedCount} skipped` : `Added ${songsLabel(added)}`;
+    }
+
     function summarizeImportResult(result) {
         const imported = (result && result.imported && result.imported.length) || 0;
         const dupes = (result && result.duplicates && result.duplicates.length) || 0;
@@ -1109,6 +1455,16 @@
         probeDurationWithMediaElement,
         importAudioFiles,
         summarizeImportResult,
+        TAG_HEAD_BYTES,
+        SUPPORTED_FORMATS_LABEL,
+        readFileRange,
+        readTagBytes,
+        readAudioMetadataFromFile,
+        runWithConcurrency,
+        importFileKey,
+        guessImportSourceName,
+        startInstantImport,
+        summarizeInstantImport,
         resolvePlaylistTracks,
         nextDefaultPlaylistName,
         buildCollectionCovers,
