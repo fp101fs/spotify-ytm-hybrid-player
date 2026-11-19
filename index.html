@@ -311,7 +311,131 @@
                             <div class="detail-similar-grid" id="detail-similar-tracks" role="list" aria-label="Similar Tracks in Your Library"></div>
                         </section>
                     </section>
-                    <section id="search-view" class="search-view" hidden aria-label="Search Results"></section>
+                    <section id="search-view" class="search-view" hidden aria-label="Search Results" aria-labelledby="search-heading">
+                        <div class="search-topbar">
+                            <button type="button" class="detail-back-btn" id="search-back-btn" aria-label="Back to Home">
+                                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.03.47a.75.75 0 0 1 0 1.06L4.56 8l6.47 6.47a.75.75 0 1 1-1.06 1.06L2.44 8 9.97.47a.75.75 0 0 1 1.06 0z"/></svg>
+                                <span>Back to Home</span>
+                            </button>
+                            <div class="search-category-tabs" id="search-category-tabs" role="tablist" aria-label="Filter Search Results by Category">
+                                <button type="button" class="search-cat-tab active" data-search-tab="all" role="tab" aria-selected="true">All Results</button>
+                                <button type="button" class="search-cat-tab" data-search-tab="songs" role="tab" aria-selected="false">Songs</button>
+                                <button type="button" class="search-cat-tab" data-search-tab="artists" role="tab" aria-selected="false">Artists</button>
+                                <button type="button" class="search-cat-tab" data-search-tab="albums" role="tab" aria-selected="false">Albums</button>
+                                <button type="button" class="search-cat-tab" data-search-tab="moods" role="tab" aria-selected="false">Genres &amp; Moods</button>
+                            </div>
+                        </div>
+
+                        <header class="search-hero-banner" id="search-hero-banner">
+                            <div class="search-hero-copy">
+                                <span class="hero-eyebrow" id="search-eyebrow">INSTANT OMNI-SEARCH &bull; HYBRID RADIO</span>
+                                <h1 class="search-hero-title" id="search-heading" tabindex="-1">Explore &amp; Search</h1>
+                                <p class="search-hero-subtitle" id="search-summary">Live filtering across songs, artists, albums, genres, and moods.</p>
+                            </div>
+                            <div class="search-hero-actions">
+                                <button type="button" class="hero-primary-btn search-start-mix-btn" id="search-start-mix-btn">
+                                    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 4a3 3 0 1 1 0 6 3 3 0 0 1 0-6z"/></svg>
+                                    <span id="search-start-mix-label">Start Search Mix</span>
+                                </button>
+                                <button type="button" class="hero-secondary-btn search-play-all-btn" id="search-play-all-btn">
+                                    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="m7.05 3.606 13.49 7.788a.7.7 0 0 1 0 1.212L7.05 20.394A.7.7 0 0 1 6 19.788V4.212a.7.7 0 0 1 1.05-.606z"/></svg>
+                                    <span id="search-play-all-label">Play Matches</span>
+                                </button>
+                                <button type="button" class="hero-secondary-btn search-queue-all-btn" id="search-queue-all-btn">
+                                    <span>+ Queue Matches</span>
+                                </button>
+                            </div>
+                        </header>
+
+                        <p id="search-live-status" role="status" class="visually-hidden"></p>
+
+                        <!-- Top Result + Matching Songs 2-Column Hero Grid -->
+                        <div class="search-top-grid" id="search-top-grid">
+                            <!-- Left Column: Top Result Hero Card -->
+                            <section class="search-top-result-section" id="search-top-result-section" aria-labelledby="search-top-result-heading">
+                                <div class="section-header">
+                                    <h2 id="search-top-result-heading">Top Result</h2>
+                                    <span class="section-meta" id="search-top-result-score">Best match</span>
+                                </div>
+                                <div class="search-top-result-card" id="search-top-result-card">
+                                    <div class="search-top-result-art-wrap">
+                                        <img src="Images/Espresso.jpeg" alt="Top Result Cover" class="search-top-result-cover" id="search-top-result-cover">
+                                        <span class="search-top-result-badge" id="search-top-result-badge">SONG</span>
+                                    </div>
+                                    <div class="search-top-result-body">
+                                        <h3 class="search-top-result-title" id="search-top-result-title">Espresso</h3>
+                                        <p class="search-top-result-subtitle" id="search-top-result-subtitle">Song &bull; Sabrina Carpenter</p>
+                                        <div class="search-top-result-pills" id="search-top-result-pills"></div>
+                                        <div class="search-top-result-actions">
+                                            <button type="button" class="hero-primary-btn search-top-play-btn" id="search-top-result-play-btn">
+                                                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="m7.05 3.606 13.49 7.788a.7.7 0 0 1 0 1.212L7.05 20.394A.7.7 0 0 1 6 19.788V4.212a.7.7 0 0 1 1.05-.606z"/></svg>
+                                                <span id="search-top-result-play-label">Play</span>
+                                            </button>
+                                            <button type="button" class="hero-secondary-btn search-top-mix-btn" id="search-top-result-mix-btn">
+                                                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 4a3 3 0 1 1 0 6 3 3 0 0 1 0-6z"/></svg>
+                                                <span id="search-top-result-mix-label">Start Mix</span>
+                                            </button>
+                                            <button type="button" class="hero-secondary-btn search-top-detail-btn" id="search-top-result-detail-btn">
+                                                <span id="search-top-result-detail-label">Details</span>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
+
+                            <!-- Right Column: Matching Songs List -->
+                            <section class="search-songs-section" id="search-songs-section" aria-labelledby="search-songs-heading">
+                                <div class="section-header">
+                                    <h2 id="search-songs-heading">Songs</h2>
+                                    <span class="section-meta" id="search-songs-count">0 songs</span>
+                                </div>
+                                <div class="detail-tracklist search-songs-list" id="search-songs-list" role="list" aria-label="Matching Songs"></div>
+                            </section>
+                        </div>
+
+                        <!-- Matching Artists Section -->
+                        <section class="detail-section search-artists-section" id="search-artists-section" aria-labelledby="search-artists-heading">
+                            <div class="section-header">
+                                <h2 id="search-artists-heading">Artists</h2>
+                                <span class="section-meta" id="search-artists-count">0 artists</span>
+                            </div>
+                            <div class="search-entity-grid" id="search-artists-grid" role="list" aria-label="Matching Artists"></div>
+                        </section>
+
+                        <!-- Matching Albums Section -->
+                        <section class="detail-section search-albums-section" id="search-albums-section" aria-labelledby="search-albums-heading">
+                            <div class="section-header">
+                                <h2 id="search-albums-heading">Albums</h2>
+                                <span class="section-meta" id="search-albums-count">0 albums</span>
+                            </div>
+                            <div class="search-entity-grid" id="search-albums-grid" role="list" aria-label="Matching Albums"></div>
+                        </section>
+
+                        <!-- Matching Genres & Moods Section -->
+                        <section class="detail-section search-moods-section" id="search-moods-section" aria-labelledby="search-moods-heading">
+                            <div class="section-header">
+                                <h2 id="search-moods-heading">Genres &amp; Moods</h2>
+                                <span class="section-meta" id="search-moods-count">0 vibes</span>
+                            </div>
+                            <div class="search-moods-grid" id="search-moods-grid" role="list" aria-label="Matching Genres and Moods"></div>
+                        </section>
+
+                        <!-- Empty / Fallback Vibe Station Prompt -->
+                        <section class="search-empty-state" id="search-empty-state" hidden aria-label="No Direct Matches Found">
+                            <div class="search-empty-card">
+                                <h3 id="search-empty-title">No exact catalog matches</h3>
+                                <p id="search-empty-subtitle">You can still turn this search into a custom sonic radio station or explore tailored recommendations below.</p>
+                                <div class="search-empty-actions">
+                                    <button type="button" class="hero-primary-btn" id="search-empty-mix-btn">
+                                        <span>Start Search Mix Anyway</span>
+                                    </button>
+                                    <button type="button" class="hero-secondary-btn" id="search-empty-reset-btn">
+                                        <span>Clear Search</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </section>
+                    </section>
                 </div>
 
                 <footer class="footer">

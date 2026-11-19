@@ -18,6 +18,8 @@ let isShortcutsModalOpen = false;
 let playerEngineInstance = null;
 let activeView = "home";
 let activeDetail = null;
+let activeSearchCategory = "all";
+let activeSearchResults = null;
 
 function getStorage() {
     if (typeof window !== "undefined" && window.SpotTubeStorage) {
@@ -110,6 +112,12 @@ function getPlayerEngine() {
 
 function announceQueueStatus(message) {
     const statusEl = document.getElementById("queue-live-status");
+    if (!statusEl || !message) return;
+    statusEl.textContent = String(message);
+}
+
+function announceSearchStatus(message) {
+    const statusEl = document.getElementById("search-live-status");
     if (!statusEl || !message) return;
     statusEl.textContent = String(message);
 }
@@ -302,9 +310,14 @@ function syncActiveTrackUI() {
     renderDrawerTrackInfo(track);
     syncCrossfadeUI();
 
-    // 5. Highlight active track rows/cards if Detail View is currently open
+    // 5. Highlight active track rows/cards if Detail View or Omni-Search View is currently open
     if (activeView === "detail" && activeDetail) {
         document.querySelectorAll("#detail-view [data-track-id]").forEach((row) => {
+            row.classList.toggle("active-track", row.dataset.trackId === track.id);
+        });
+    }
+    if (activeView === "search") {
+        document.querySelectorAll("#search-view [data-track-id]").forEach((row) => {
             row.classList.toggle("active-track", row.dataset.trackId === track.id);
         });
     }
@@ -596,24 +609,32 @@ function getFilteredSongs() {
             activeMoodFilter === "All" ||
             (Array.isArray(track.moods) &&
                 track.moods.some((m) => m.toLowerCase() === activeMoodFilter.toLowerCase())) ||
-            (track.genre && track.genre.toLowerCase() === activeMoodFilter.toLowerCase());
+            (track.genre && track.genre.toLowerCase() === activeMoodFilter.toLowerCase()) ||
+            (track.language && track.language.toLowerCase() === activeMoodFilter.toLowerCase());
 
         if (!matchesMood) return false;
 
         if (!activeSearchQuery) return true;
-        const q = activeSearchQuery.toLowerCase();
+        const q = activeSearchQuery.trim().toLowerCase();
+        if (!q) return true;
+        const tokens = q.split(/\s+/).filter(Boolean);
         const haystacks = [
             track.title,
             track.artistDisplay,
+            ...(Array.isArray(track.artists) ? track.artists : []),
+            ...(Array.isArray(track.featuredArtists) ? track.featuredArtists : []),
             track.album,
             track.genre,
+            track.language,
+            track.year ? String(track.year) : "",
             ...(track.moods || []),
             ...(track.subgenres || []),
         ]
             .filter(Boolean)
             .join(" ")
             .toLowerCase();
-        return haystacks.includes(q);
+        if (haystacks.includes(q)) return true;
+        return tokens.length > 1 && tokens.every((token) => haystacks.includes(token));
     });
 }
 
@@ -1482,7 +1503,8 @@ function pushNavState() {
         currentDetailType === nextDetailType &&
         currentDetailTarget === nextDetailTarget &&
         current.mood === activeMoodFilter &&
-        current.query === activeSearchQuery
+        current.query === activeSearchQuery &&
+        (current.searchCategory || "all") === activeSearchCategory
     ) {
         return;
     }
@@ -1498,6 +1520,7 @@ function pushNavState() {
             : null,
         mood: activeMoodFilter,
         query: activeSearchQuery,
+        searchCategory: activeSearchCategory,
     });
     navHistoryIndex = navHistory.length - 1;
 }
@@ -1508,6 +1531,7 @@ function restoreNavSnapshot(snap) {
     const searchInput = document.getElementById("search-input");
     const searchClearBtn = document.getElementById("search-clear-btn");
     activeSearchQuery = snap.query || "";
+    activeSearchCategory = snap.searchCategory || "all";
     if (searchInput) searchInput.value = activeSearchQuery;
     if (searchClearBtn) searchClearBtn.hidden = !activeSearchQuery;
 
@@ -1522,6 +1546,12 @@ function restoreNavSnapshot(snap) {
 
     if (snap.view === "detail" && snap.detail) {
         openDetailView(snap.detail, { skipHistory: true });
+    } else if (snap.view === "search") {
+        openSearchView(activeSearchQuery, {
+            category: activeSearchCategory,
+            skipHistory: true,
+            skipFocus: true,
+        });
     } else {
         closeDetailView({ skipHistory: true });
         renderCatalogGrid();
@@ -1538,6 +1568,10 @@ function navigateBack() {
     }
     if (activeView === "detail") {
         closeDetailView();
+        return navHistory[navHistoryIndex];
+    }
+    if (activeView === "search") {
+        closeSearchView();
         return navHistory[navHistoryIndex];
     }
     return null;
@@ -2333,12 +2367,17 @@ function createDetailTrackRowNode(track, idx) {
         )
         .join("<span>, </span>");
 
+    const matchBadgeHtml = track.searchMatch?.matchReason
+        ? `<span class="queue-source-pill play-next-pill">${track.searchMatch.matchReason}</span>`
+        : "";
+
     row.innerHTML = `
         <span class="detail-track-num">${idx + 1}</span>
         <img src="${track.coverUrl}" alt="${track.title}" class="detail-track-cover">
         <div class="detail-track-main">
             <div class="detail-track-title-row">
                 <span class="detail-track-title" data-open-song="${track.id}" title="Open Song Detail: ${track.title}">${track.title}</span>
+                ${matchBadgeHtml}
             </div>
             <div class="detail-track-artists">${artistButtonsHtml}</div>
         </div>
@@ -2925,15 +2964,22 @@ function closeDetailView(options = {}) {
     }
 
     const detailView = document.getElementById("detail-view");
+    const searchView = document.getElementById("search-view");
     runMainViewTransition(() => {
         if (detailView) {
             detailView.hidden = true;
             detailView.setAttribute("aria-hidden", "true");
             detailView.setAttribute("inert", "inert");
         }
+        if (searchView) {
+            searchView.hidden = true;
+            searchView.setAttribute("aria-hidden", "true");
+            searchView.setAttribute("inert", "inert");
+        }
         setHomeSectionsHidden(false);
-    }, "catalog-section-title");
+    }, options.skipFocus ? null : "catalog-section-title");
 
+    syncPrimaryNavUI();
     return true;
 }
 
@@ -2942,6 +2988,1353 @@ function startDetailMix(options = {}) {
         return startRadioMix({ type: "supermix" }, options);
     }
     return startRadioMix(activeDetail.data.seedSpec, options);
+}
+
+// ==================== INSTANT OMNI-SEARCH & SEARCH RADIO MIX (ITEM 9) ====================
+
+const VALID_SEARCH_CATEGORIES = ["all", "songs", "artists", "albums", "moods"];
+
+function normalizeSearchCategory(category) {
+    const clean = String(category || "all")
+        .trim()
+        .toLowerCase();
+    return VALID_SEARCH_CATEGORIES.includes(clean) ? clean : "all";
+}
+
+function syncPrimaryNavUI() {
+    const navHome = document.getElementById("nav-home");
+    const navSearch = document.getElementById("nav-search");
+    if (navHome) {
+        navHome.classList.toggle("active", activeView === "home");
+    }
+    if (navSearch) {
+        navSearch.classList.toggle("active", activeView === "search");
+    }
+}
+
+function scoreSearchFieldMatch(value, queryLower, tokens) {
+    if (!queryLower) {
+        return { matched: true, score: 0.5, matchType: "explore" };
+    }
+    const text = String(value || "")
+        .trim()
+        .toLowerCase();
+    if (!text) {
+        return { matched: false, score: 0, matchType: null };
+    }
+    if (text === queryLower) {
+        return { matched: true, score: 1.0, matchType: "exact" };
+    }
+    if (text.startsWith(queryLower)) {
+        return { matched: true, score: 0.92, matchType: "prefix" };
+    }
+    const words = text.split(/[\s,\-()/&•]+/).filter(Boolean);
+    if (words.some((w) => w === queryLower)) {
+        return { matched: true, score: 0.88, matchType: "word-exact" };
+    }
+    if (words.some((w) => w.startsWith(queryLower))) {
+        return { matched: true, score: 0.83, matchType: "word-prefix" };
+    }
+    if (text.includes(queryLower)) {
+        return { matched: true, score: 0.75, matchType: "substring" };
+    }
+    if (tokens.length > 1) {
+        const hitCount = tokens.filter((tk) => text.includes(tk)).length;
+        if (hitCount === tokens.length) {
+            return { matched: true, score: 0.8, matchType: "all-tokens" };
+        }
+        if (hitCount > 0) {
+            return {
+                matched: true,
+                score: Number((0.42 + (hitCount / tokens.length) * 0.3).toFixed(3)),
+                matchType: "partial-tokens",
+            };
+        }
+    }
+    return { matched: false, score: 0, matchType: null };
+}
+
+/**
+ * Live Instant Omni-Search across songs, artists, albums, and genres/moods/languages.
+ * Returns structured results with a "Top Result" hero descriptor and a tailored `seedSpec`
+ * for turning any search query into an endless radio station.
+ */
+function buildOmniSearchResults(queryInput, options = {}) {
+    const rawQuery = String(
+        queryInput !== undefined ? queryInput : activeSearchQuery || ""
+    ).trim();
+    const qLower = rawQuery.toLowerCase();
+    const tokens = qLower.split(/\s+/).filter(Boolean);
+    const moodFilter = options.moodFilter !== undefined ? options.moodFilter : activeMoodFilter;
+    const category = normalizeSearchCategory(options.category || activeSearchCategory);
+    const isExploreMode = qLower.length === 0;
+
+    const store = getStorage();
+    const recommender = getRecommender();
+
+    // Filter candidate pool by active mood chip if requested
+    const moodFilteredPool = songs.filter((track) => {
+        if (!moodFilter || moodFilter === "All" || options.ignoreMoodFilter) return true;
+        return (
+            (Array.isArray(track.moods) &&
+                track.moods.some((m) => m.toLowerCase() === moodFilter.toLowerCase())) ||
+            (track.genre && track.genre.toLowerCase() === moodFilter.toLowerCase()) ||
+            (track.language && track.language.toLowerCase() === moodFilter.toLowerCase())
+        );
+    });
+    const basePool = moodFilteredPool.length > 0 ? moodFilteredPool : songs;
+
+    // 1. Score & filter Songs
+    const matchedSongs = [];
+    for (const track of basePool) {
+        const trackArtists = getTrackArtistList(track);
+        const moods = Array.isArray(track.moods) ? track.moods : [];
+        const subgenres = Array.isArray(track.subgenres) ? track.subgenres : [];
+
+        const affinity =
+            store && typeof store.computeTasteAffinity === "function"
+                ? store.computeTasteAffinity(track.id).normalizedScore
+                : 0.5;
+        const popularity = Number(track.popularity ?? 0.75);
+        const tastePrior = affinity * 0.1 + popularity * 0.06;
+
+        if (isExploreMode) {
+            matchedSongs.push({
+                ...track,
+                searchMatch: {
+                    score: Number((0.65 + tastePrior).toFixed(3)),
+                    directFieldScore: 0.5,
+                    matchedField: "explore",
+                    matchReason:
+                        likedTrackIds.has(track.id)
+                            ? "♥ Liked Favorite"
+                            : `${track.genre || "Pop"} • ${track.bpm || 110} BPM`,
+                },
+            });
+            continue;
+        }
+
+        const titleRes = scoreSearchFieldMatch(track.title, qLower, tokens);
+        const artistMatches = trackArtists.map((a) => ({
+            artist: a,
+            ...scoreSearchFieldMatch(a, qLower, tokens),
+        }));
+        artistMatches.sort((a, b) => b.score - a.score);
+        const bestArtistRes = artistMatches[0] || { score: 0, matched: false, artist: track.primaryArtist };
+        const displayArtistRes = scoreSearchFieldMatch(track.artistDisplay, qLower, tokens);
+        const artistScore = Math.max(bestArtistRes.score, displayArtistRes.score);
+
+        const albumRes = scoreSearchFieldMatch(track.album, qLower, tokens);
+        const genreRes = scoreSearchFieldMatch(track.genre, qLower, tokens);
+        const subgenreMatches = subgenres.map((sg) => ({
+            subgenre: sg,
+            ...scoreSearchFieldMatch(sg, qLower, tokens),
+        }));
+        subgenreMatches.sort((a, b) => b.score - a.score);
+        const bestSubgenreRes = subgenreMatches[0] || { score: 0, matched: false };
+
+        const moodMatches = moods.map((m) => ({
+            mood: m,
+            ...scoreSearchFieldMatch(m, qLower, tokens),
+        }));
+        moodMatches.sort((a, b) => b.score - a.score);
+        const bestMoodRes = moodMatches[0] || { score: 0, matched: false };
+
+        const langRes = scoreSearchFieldMatch(track.language, qLower, tokens);
+        const yearRes = scoreSearchFieldMatch(String(track.year || ""), qLower, tokens);
+
+        const combinedHaystack = [
+            track.title,
+            track.artistDisplay,
+            ...trackArtists,
+            track.album,
+            track.genre,
+            ...subgenres,
+            ...moods,
+            track.language,
+            track.year ? String(track.year) : "",
+        ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+
+        const allTokensInCombined =
+            tokens.length > 0 && tokens.every((tk) => combinedHaystack.includes(tk));
+        const directSubstringInCombined = combinedHaystack.includes(qLower);
+
+        if (!allTokensInCombined && !directSubstringInCombined) {
+            continue;
+        }
+
+        // Determine highest-scoring field and human-readable matchReason
+        const candidates = [
+            {
+                field: "title",
+                rawScore: titleRes.score,
+                weighted: titleRes.score * 1.06,
+                reason:
+                    titleRes.matchType === "exact"
+                        ? "Exact Song Match"
+                        : "Title Match",
+            },
+            {
+                field: "artist",
+                rawScore: artistScore,
+                weighted: artistScore * 0.98,
+                reason: `Artist • ${bestArtistRes.artist || track.primaryArtist}`,
+            },
+            {
+                field: "album",
+                rawScore: albumRes.score,
+                weighted: albumRes.score * 0.92,
+                reason: `Album • ${track.album}`,
+            },
+            {
+                field: "genre",
+                rawScore: Math.max(genreRes.score, bestSubgenreRes.score),
+                weighted: Math.max(genreRes.score, bestSubgenreRes.score) * 0.88,
+                reason:
+                    genreRes.score >= bestSubgenreRes.score
+                        ? `Genre • ${track.genre}`
+                        : `Subgenre • ${bestSubgenreRes.subgenre}`,
+            },
+            {
+                field: "mood",
+                rawScore: bestMoodRes.score,
+                weighted: bestMoodRes.score * 0.88,
+                reason: `Mood • ${bestMoodRes.mood || moods[0] || "Vibe"}`,
+            },
+            {
+                field: "language",
+                rawScore: Math.max(langRes.score, yearRes.score),
+                weighted: Math.max(langRes.score, yearRes.score) * 0.84,
+                reason:
+                    langRes.score >= yearRes.score
+                        ? `Language • ${track.language}`
+                        : `Year • ${track.year}`,
+            },
+        ];
+
+        candidates.sort((a, b) => b.weighted - a.weighted);
+        const topField = candidates[0];
+        const multiFieldHits = candidates.filter((c) => c.rawScore >= 0.7).length;
+        const multiFieldBonus = multiFieldHits > 1 ? Math.min(0.12, (multiFieldHits - 1) * 0.05) : 0;
+        const baseScore = topField.weighted > 0 ? topField.weighted : 0.68;
+        const totalScore = Math.min(1, Number((baseScore + multiFieldBonus + tastePrior * 0.5).toFixed(3)));
+
+        matchedSongs.push({
+            ...track,
+            searchMatch: {
+                score: totalScore,
+                titleScore: titleRes.score,
+                artistScore,
+                albumScore: albumRes.score,
+                genreScore: Math.max(genreRes.score, bestSubgenreRes.score),
+                moodScore: bestMoodRes.score,
+                matchedField: topField.rawScore > 0 ? topField.field : "combined",
+                matchReason:
+                    multiFieldHits > 1 && topField.rawScore > 0
+                        ? `${topField.reason} + Multi-Match`
+                        : topField.rawScore > 0
+                          ? topField.reason
+                          : "Catalog Match",
+            },
+        });
+    }
+
+    matchedSongs.sort((a, b) => (b.searchMatch?.score || 0) - (a.searchMatch?.score || 0));
+    const matchedSongIds = new Set(matchedSongs.map((t) => t.id));
+
+    // 2. Score & filter Artists across primary + featured artists
+    const artistMap = new Map();
+    for (const track of songs) {
+        for (const artistName of getTrackArtistList(track)) {
+            const key = artistName.toLowerCase();
+            if (!artistMap.has(key)) {
+                artistMap.set(key, {
+                    artist: artistName,
+                    tracks: [],
+                    genres: new Set(),
+                    moods: new Set(),
+                    albums: new Set(),
+                    languages: new Set(),
+                });
+            }
+            const entry = artistMap.get(key);
+            entry.tracks.push(track);
+            if (track.genre) entry.genres.add(track.genre);
+            if (track.album) entry.albums.add(track.album);
+            if (track.language) entry.languages.add(track.language);
+            for (const m of track.moods || []) entry.moods.add(m);
+        }
+    }
+
+    const matchedArtists = [];
+    for (const entry of artistMap.values()) {
+        const nameRes = scoreSearchFieldMatch(entry.artist, qLower, tokens);
+        const genresArr = Array.from(entry.genres);
+        const moodsArr = Array.from(entry.moods);
+        const albumsArr = Array.from(entry.albums);
+        const langsArr = Array.from(entry.languages);
+
+        const matchingArtistTracks = entry.tracks.filter((t) => matchedSongIds.has(t.id));
+        const genreScore = Math.max(
+            0,
+            ...genresArr.map((g) => scoreSearchFieldMatch(g, qLower, tokens).score)
+        );
+        const moodScore = Math.max(
+            0,
+            ...moodsArr.map((m) => scoreSearchFieldMatch(m, qLower, tokens).score)
+        );
+        const langScore = Math.max(
+            0,
+            ...langsArr.map((l) => scoreSearchFieldMatch(l, qLower, tokens).score)
+        );
+
+        if (!isExploreMode && !nameRes.matched && matchingArtistTracks.length === 0 && genreScore === 0 && moodScore === 0 && langScore === 0) {
+            continue;
+        }
+
+        const leadTrack =
+            entry.tracks.find(
+                (t) => String(t.primaryArtist || "").toLowerCase() === entry.artist.toLowerCase()
+            ) || entry.tracks[0];
+
+        const avgPopularity =
+            entry.tracks.reduce((s, t) => s + Number(t.popularity ?? 0.75), 0) /
+            Math.max(1, entry.tracks.length);
+
+        let artistScore = 0.6 + avgPopularity * 0.1;
+        let matchReason = `${genresArr.join(" / ") || "Artist"} • ${entry.tracks.length} ${entry.tracks.length === 1 ? "song" : "songs"}`;
+
+        if (!isExploreMode) {
+            if (nameRes.matched) {
+                artistScore = Math.min(1, Number((nameRes.score * 1.04 + avgPopularity * 0.05).toFixed(3)));
+                matchReason =
+                    nameRes.matchType === "exact" ? "Exact Artist Match" : "Artist Match";
+            } else if (genreScore >= 0.75 || moodScore >= 0.75 || langScore >= 0.75) {
+                const topTagScore = Math.max(genreScore, moodScore, langScore);
+                artistScore = Number((topTagScore * 0.8 + avgPopularity * 0.06).toFixed(3));
+                matchReason = `${genresArr[0] || "Vibe"} Artist`;
+            } else {
+                artistScore = Number((0.64 + Math.min(0.15, matchingArtistTracks.length * 0.05)).toFixed(3));
+                matchReason = `Featured on ${matchingArtistTracks[0]?.title || "matching song"}`;
+            }
+        }
+
+        matchedArtists.push({
+            type: "artist",
+            id: entry.artist,
+            artist: entry.artist,
+            title: entry.artist,
+            coverUrl: leadTrack?.coverUrl || "Images/Espresso.jpeg",
+            trackCount: entry.tracks.length,
+            albumCount: albumsArr.length,
+            genres: genresArr,
+            moods: moodsArr,
+            albums: albumsArr,
+            languages: langsArr,
+            tracks: entry.tracks,
+            score: artistScore,
+            nameScore: isExploreMode ? 0.5 : nameRes.score,
+            matchReason,
+            seedSpec: { type: "artist", artist: entry.artist },
+        });
+    }
+    matchedArtists.sort((a, b) => b.score - a.score || b.trackCount - a.trackCount);
+
+    // 3. Score & filter Albums
+    const albumMap = new Map();
+    for (const track of songs) {
+        const albName = track.album || `${track.title} (Single)`;
+        if (!albumMap.has(albName)) {
+            albumMap.set(albName, []);
+        }
+        albumMap.get(albName).push(track);
+    }
+
+    const matchedAlbums = [];
+    for (const [albName, albTracks] of albumMap.entries()) {
+        const summary = buildAlbumSummaryObject(albName, albTracks, "Album / Single", false);
+        const albumRes = scoreSearchFieldMatch(albName, qLower, tokens);
+        const artistRes = Math.max(
+            0,
+            ...summary.artists.map((a) => scoreSearchFieldMatch(a, qLower, tokens).score)
+        );
+        const genreRes = scoreSearchFieldMatch(summary.genre, qLower, tokens);
+        const yearRes = scoreSearchFieldMatch(String(summary.year || ""), qLower, tokens);
+        const hasMatchedSong = albTracks.some((t) => matchedSongIds.has(t.id));
+
+        if (!isExploreMode && !albumRes.matched && artistRes === 0 && !genreRes.matched && !yearRes.matched && !hasMatchedSong) {
+            continue;
+        }
+
+        let albumScore = 0.58;
+        let matchReason = `${summary.year} • ${summary.genre}`;
+        if (!isExploreMode) {
+            if (albumRes.matched && albumRes.score >= artistRes) {
+                albumScore = Math.min(1, Number((albumRes.score * 1.03).toFixed(3)));
+                matchReason =
+                    albumRes.matchType === "exact" ? "Exact Album Match" : "Album Match";
+            } else if (artistRes > 0) {
+                albumScore = Number((artistRes * 0.86).toFixed(3));
+                matchReason = `By ${summary.artistDisplay}`;
+            } else if (genreRes.matched || yearRes.matched) {
+                albumScore = Number((Math.max(genreRes.score, yearRes.score) * 0.8).toFixed(3));
+                matchReason = `${summary.genre} • ${summary.year}`;
+            } else {
+                albumScore = 0.65;
+                matchReason = `Includes ${albTracks.find((t) => matchedSongIds.has(t.id))?.title || "matching track"}`;
+            }
+        }
+
+        matchedAlbums.push({
+            ...summary,
+            type: "album",
+            id: albName,
+            title: albName,
+            score: albumScore,
+            albumNameScore: isExploreMode ? 0.5 : albumRes.score,
+            matchReason,
+            seedSpec: { type: "album", album: albName },
+        });
+    }
+    matchedAlbums.sort((a, b) => b.score - a.score || b.year - a.year);
+
+    // 4. Score & filter Genres, Moods & Languages
+    const categoryCatalog = new Map();
+    const registerCategory = (name, categoryType, track) => {
+        const clean = String(name || "").trim();
+        if (!clean) return;
+        const key = `${categoryType}:${clean.toLowerCase()}`;
+        if (!categoryCatalog.has(key)) {
+            categoryCatalog.set(key, {
+                id: clean,
+                name: clean,
+                categoryType,
+                badge:
+                    categoryType === "genre"
+                        ? "GENRE RADIO"
+                        : categoryType === "language"
+                          ? "LANGUAGE MIX"
+                          : categoryType === "subgenre"
+                            ? "SUBGENRE VIBE"
+                            : "MOOD VIBE",
+                tracks: [],
+                artists: new Set(),
+            });
+        }
+        const entry = categoryCatalog.get(key);
+        if (!entry.tracks.some((t) => t.id === track.id)) {
+            entry.tracks.push(track);
+        }
+        if (track.primaryArtist) entry.artists.add(track.primaryArtist);
+    };
+
+    for (const track of songs) {
+        if (track.genre) registerCategory(track.genre, "genre", track);
+        if (track.language) registerCategory(track.language, "language", track);
+        for (const m of track.moods || []) registerCategory(m, "mood", track);
+        for (const sg of track.subgenres || []) registerCategory(sg, "subgenre", track);
+    }
+
+    const matchedMoods = [];
+    const seenMoodNames = new Set();
+    for (const entry of categoryCatalog.values()) {
+        const lowerName = entry.name.toLowerCase();
+        if (seenMoodNames.has(lowerName)) continue;
+
+        const tagRes = scoreSearchFieldMatch(entry.name, qLower, tokens);
+        const overlapWithMatchedSongs = entry.tracks.filter((t) => matchedSongIds.has(t.id)).length;
+
+        if (!isExploreMode && !tagRes.matched && overlapWithMatchedSongs === 0) {
+            continue;
+        }
+
+        let tagScore = 0.5 + Math.min(0.2, entry.tracks.length * 0.02);
+        let matchReason = `${entry.tracks.length} ${entry.tracks.length === 1 ? "track" : "tracks"}`;
+
+        if (!isExploreMode) {
+            if (tagRes.matched) {
+                tagScore = Math.min(1, Number((tagRes.score * 1.02).toFixed(3)));
+                matchReason =
+                    tagRes.matchType === "exact"
+                        ? `Exact ${entry.categoryType.toUpperCase()} Match`
+                        : `${entry.badge}`;
+            } else {
+                tagScore = Number((0.55 + Math.min(0.2, overlapWithMatchedSongs * 0.08)).toFixed(3));
+                matchReason = `Related Vibe (${overlapWithMatchedSongs} matching ${overlapWithMatchedSongs === 1 ? "song" : "songs"})`;
+            }
+        }
+
+        seenMoodNames.add(lowerName);
+        const sampleArtists = Array.from(entry.artists).slice(0, 3);
+        matchedMoods.push({
+            type: entry.categoryType === "genre" ? "genre" : "mood",
+            id: entry.name,
+            name: entry.name,
+            title: entry.name,
+            categoryType: entry.categoryType,
+            badge: entry.badge,
+            trackCount: entry.tracks.length,
+            tracks: entry.tracks,
+            sampleArtists,
+            subtitle: sampleArtists.length
+                ? `Feat. ${sampleArtists.join(", ")}`
+                : `${entry.tracks.length} tracks in catalog`,
+            coverUrl: entry.tracks[0]?.coverUrl || "Images/Espresso.jpeg",
+            score: tagScore,
+            tagScore: isExploreMode ? 0.5 : tagRes.score,
+            matchReason,
+            seedSpec: {
+                type: "mood",
+                mood: entry.name,
+                badge: entry.badge,
+                label: `${entry.name} Vibe Radio`,
+                tracks: entry.tracks,
+            },
+        });
+    }
+    matchedMoods.sort((a, b) => b.score - a.score || b.trackCount - a.trackCount);
+
+    // 5. Build Tailored Search Radio Seed Tracks (even if 0 literal substring matches!)
+    let seedTracks = matchedSongs.slice(0, 6);
+    if (seedTracks.length === 0 && songs.length > 0) {
+        if (recommender && typeof recommender.recommendTracks === "function") {
+            seedTracks = recommender.recommendTracks(songs, {
+                seed: rawQuery ? { query: rawQuery } : { mood: moodFilter || "All" },
+                limit: 6,
+                storage: store,
+                mixMode: activeMixMode,
+            });
+        }
+        if (seedTracks.length === 0) {
+            seedTracks = songs.slice(0, 4);
+        }
+    }
+
+    const searchSeedSpec = isExploreMode
+        ? moodFilter && moodFilter !== "All"
+            ? { type: "mood", mood: moodFilter }
+            : { type: "supermix" }
+        : {
+              type: "search",
+              query: rawQuery,
+              tracks: seedTracks,
+              badge: "SEARCH MIX",
+              label: `Search Mix: "${rawQuery}"`,
+          };
+
+    // 6. Select the "Top Result" Hero Card across Song, Artist, Album, and Genre/Mood
+    const topSong = matchedSongs[0] || null;
+    const topArtist = matchedArtists[0] || null;
+    const topAlbum = matchedAlbums[0] || null;
+    const topMood = matchedMoods[0] || null;
+
+    let topResult = null;
+
+    if (isExploreMode) {
+        const heroTrack = topSong || songs[currentTrackIndex] || songs[0];
+        if (moodFilter && moodFilter !== "All") {
+            topResult = {
+                type: "mood",
+                id: moodFilter,
+                mood: moodFilter,
+                title: `${moodFilter} Vibe Radio`,
+                subtitle: `${basePool.length} matching tracks • Dynamic mood station`,
+                badge: "TOP RESULT • MOOD STATION",
+                coverUrl: heroTrack?.coverUrl || "Images/Espresso.jpeg",
+                score: 1,
+                matchReason: "Active Mood Filter",
+                pills: [
+                    `${basePool.length} Tracks`,
+                    `${heroTrack?.bpm || 110} BPM`,
+                    "Nonstop Radio",
+                ],
+                tracks: basePool,
+                seedSpec: { type: "mood", mood: moodFilter },
+                playLabel: `Play ${moodFilter}`,
+                mixLabel: `Start ${moodFilter} Mix`,
+                detailLabel: "Filter Catalog",
+            };
+        } else if (heroTrack) {
+            topResult = {
+                type: "song",
+                id: heroTrack.id,
+                track: heroTrack,
+                title: heroTrack.title,
+                subtitle: `Song • ${heroTrack.artistDisplay} • ${heroTrack.album}`,
+                badge: "TOP RESULT • FEATURED TRACK",
+                coverUrl: heroTrack.coverUrl,
+                score: heroTrack.searchMatch?.score || 0.95,
+                matchReason: heroTrack.searchMatch?.matchReason || "Featured Pick",
+                pills: [
+                    heroTrack.genre || "Pop",
+                    `${heroTrack.bpm || 110} BPM`,
+                    `${Math.round((heroTrack.energy ?? 0.7) * 100)}% Energy`,
+                    heroTrack.durationFormatted || "0:00",
+                ],
+                tracks: [heroTrack],
+                seedSpec: { type: "track", track: heroTrack },
+                playLabel: "Play Song",
+                mixLabel: "Start Song Mix",
+                detailLabel: "Song Details",
+            };
+        }
+    } else {
+        const songDirectScore = topSong?.searchMatch?.titleScore || 0;
+        const artistDirectScore = topArtist?.nameScore || 0;
+        const albumDirectScore = topAlbum?.albumNameScore || 0;
+        const moodDirectScore = topMood?.tagScore || 0;
+
+        // Pick best entity type based on direct name/title match strength
+        let winningType = "song";
+        let bestDirect = songDirectScore;
+
+        if (artistDirectScore >= 0.83 && artistDirectScore >= bestDirect) {
+            winningType = "artist";
+            bestDirect = artistDirectScore;
+        }
+        if (albumDirectScore >= 0.83 && albumDirectScore > bestDirect) {
+            winningType = "album";
+            bestDirect = albumDirectScore;
+        }
+        if (moodDirectScore >= 0.88 && moodDirectScore > bestDirect) {
+            winningType = "mood";
+            bestDirect = moodDirectScore;
+        }
+
+        if (bestDirect < 0.7) {
+            // Fall back to highest overall score among available entities
+            const rankedEntities = [
+                topSong ? { type: "song", score: topSong.searchMatch?.score || 0 } : null,
+                topArtist ? { type: "artist", score: topArtist.score || 0 } : null,
+                topAlbum ? { type: "album", score: topAlbum.score || 0 } : null,
+                topMood ? { type: "mood", score: topMood.score || 0 } : null,
+            ].filter(Boolean);
+            rankedEntities.sort((a, b) => b.score - a.score);
+            winningType = rankedEntities[0]?.type || "search";
+        }
+
+        if (winningType === "artist" && topArtist) {
+            topResult = {
+                type: "artist",
+                id: topArtist.artist,
+                artist: topArtist.artist,
+                title: topArtist.artist,
+                subtitle: `Artist • ${topArtist.trackCount} ${topArtist.trackCount === 1 ? "song" : "songs"} • ${topArtist.genres.join(", ") || "Music"}`,
+                badge: "TOP RESULT • ARTIST",
+                coverUrl: topArtist.coverUrl,
+                score: topArtist.score,
+                matchReason: topArtist.matchReason,
+                pills: [
+                    `${topArtist.trackCount} ${topArtist.trackCount === 1 ? "Track" : "Tracks"}`,
+                    `${topArtist.albumCount} ${topArtist.albumCount === 1 ? "Release" : "Releases"}`,
+                    ...(topArtist.genres || []).slice(0, 2),
+                ],
+                tracks: topArtist.tracks,
+                seedSpec: { type: "artist", artist: topArtist.artist },
+                playLabel: "Play Top Tracks",
+                mixLabel: `Start ${topArtist.artist} Mix`,
+                detailLabel: "Artist Profile",
+            };
+        } else if (winningType === "album" && topAlbum) {
+            topResult = {
+                type: "album",
+                id: topAlbum.album,
+                album: topAlbum.album,
+                title: topAlbum.album,
+                subtitle: `Album • ${topAlbum.artistDisplay} • ${topAlbum.year}`,
+                badge: "TOP RESULT • ALBUM",
+                coverUrl: topAlbum.coverUrl,
+                score: topAlbum.score,
+                matchReason: topAlbum.matchReason,
+                pills: [
+                    `${topAlbum.trackCount} ${topAlbum.trackCount === 1 ? "Track" : "Tracks"}`,
+                    topAlbum.genre || "Music",
+                    String(topAlbum.year || 2024),
+                    topAlbum.totalDurationFormatted,
+                ],
+                tracks: topAlbum.tracks,
+                seedSpec: { type: "album", album: topAlbum.album },
+                playLabel: "Play Album",
+                mixLabel: "Start Album Mix",
+                detailLabel: "View Album",
+            };
+        } else if (winningType === "mood" && topMood) {
+            topResult = {
+                type: topMood.type,
+                id: topMood.name,
+                mood: topMood.name,
+                title: `${topMood.name}`,
+                subtitle: `${topMood.badge} • ${topMood.trackCount} tracks • ${topMood.subtitle}`,
+                badge: `TOP RESULT • ${topMood.badge}`,
+                coverUrl: topMood.coverUrl,
+                score: topMood.score,
+                matchReason: topMood.matchReason,
+                pills: [
+                    `${topMood.trackCount} Tracks`,
+                    topMood.categoryType.toUpperCase(),
+                    ...topMood.sampleArtists.slice(0, 2),
+                ],
+                tracks: topMood.tracks,
+                seedSpec: topMood.seedSpec,
+                playLabel: `Play ${topMood.name}`,
+                mixLabel: `Start ${topMood.name} Mix`,
+                detailLabel: "Apply Filter",
+            };
+        } else if (topSong) {
+            topResult = {
+                type: "song",
+                id: topSong.id,
+                track: topSong,
+                title: topSong.title,
+                subtitle: `Song • ${topSong.artistDisplay} • ${topSong.album}`,
+                badge: "TOP RESULT • SONG",
+                coverUrl: topSong.coverUrl,
+                score: topSong.searchMatch?.score || 0.9,
+                matchReason: topSong.searchMatch?.matchReason || "Song Match",
+                pills: [
+                    topSong.genre || "Pop",
+                    `${topSong.bpm || 110} BPM`,
+                    `${Math.round((topSong.energy ?? 0.7) * 100)}% Energy`,
+                    topSong.durationFormatted || "0:00",
+                ],
+                tracks: [topSong],
+                seedSpec: { type: "track", track: topSong },
+                playLabel: "Play Song",
+                mixLabel: "Start Song Mix",
+                detailLabel: "Song Details",
+            };
+        } else {
+            // Custom Vibe Fallback when 0 literal matches exist
+            const fallbackLead = seedTracks[0] || songs[0];
+            topResult = {
+                type: "search",
+                id: rawQuery,
+                query: rawQuery,
+                title: `Search Mix: "${rawQuery}"`,
+                subtitle: `Custom AI/Sonic Radio Station seeded by your taste & audio features`,
+                badge: "TOP RESULT • CUSTOM SEARCH STATION",
+                coverUrl: fallbackLead?.coverUrl || "Images/Espresso.jpeg",
+                score: 0.75,
+                matchReason: "Sonic Fallback Station",
+                pills: [
+                    `${seedTracks.length} Seed Tracks`,
+                    "Endless Auto-Queue",
+                    "Multi-Signal Match",
+                ],
+                tracks: seedTracks,
+                seedSpec: searchSeedSpec,
+                playLabel: "Start Station",
+                mixLabel: "Start Search Mix",
+                detailLabel: "Explore All",
+            };
+        }
+    }
+
+    const hasExactMatches =
+        matchedSongs.length > 0 ||
+        matchedArtists.length > 0 ||
+        matchedAlbums.length > 0 ||
+        matchedMoods.length > 0;
+
+    return {
+        query: rawQuery,
+        normalizedQuery: qLower,
+        tokens,
+        category,
+        moodFilter,
+        isExploreMode,
+        hasExactMatches,
+        totalMatches:
+            matchedSongs.length +
+            matchedArtists.length +
+            matchedAlbums.length +
+            matchedMoods.length,
+        topResult,
+        songs: matchedSongs,
+        artists: matchedArtists,
+        albums: matchedAlbums,
+        moods: matchedMoods,
+        seedTracks,
+        seedSpec: searchSeedSpec,
+    };
+}
+
+function searchCatalog(queryInput, options = {}) {
+    return buildOmniSearchResults(queryInput, options);
+}
+
+function createSearchArtistCardNode(artistItem) {
+    const card = document.createElement("div");
+    card.className = "detail-album-card search-artist-card";
+    card.setAttribute("role", "listitem");
+    card.dataset.artist = artistItem.artist;
+
+    card.innerHTML = `
+        <div class="detail-card-cover-wrap">
+            <img src="${artistItem.coverUrl}" alt="${artistItem.artist}" class="detail-card-cover">
+        </div>
+        <span class="detail-card-relation">${artistItem.matchReason || "Artist Profile"}</span>
+        <h4 class="detail-card-title">${artistItem.artist}</h4>
+        <p class="detail-card-sub">
+            ${artistItem.trackCount} ${artistItem.trackCount === 1 ? "song" : "songs"} &bull; ${(artistItem.genres || []).join(", ") || "Music"}
+        </p>
+        <div class="card-quick-actions" role="group" aria-label="Artist actions for ${artistItem.artist}">
+            <button type="button" class="card-action-btn" data-search-artist-action="open-artist" title="Open ${artistItem.artist} Profile">
+                <span>Profile</span>
+            </button>
+            <button type="button" class="card-action-btn" data-search-artist-action="play-artist" title="Play top songs by ${artistItem.artist}">
+                <span>Play</span>
+            </button>
+            <button type="button" class="card-action-btn mix-action-btn" data-search-artist-action="start-mix" title="Start ${artistItem.artist} Radio Mix">
+                <span>Start Mix</span>
+            </button>
+        </div>
+    `;
+
+    if (typeof card.querySelectorAll === "function") {
+        card.querySelectorAll("[data-search-artist-action]").forEach((btn) => {
+            btn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const action = btn.dataset.searchArtistAction;
+                if (action === "open-artist") {
+                    openArtistDetail(artistItem.artist);
+                } else if (action === "play-artist") {
+                    const tracks = artistItem.tracks || [];
+                    if (tracks.length > 0) {
+                        playMusic(tracks[0].id, false);
+                        for (let i = 1; i < tracks.length; i++) {
+                            addTrackToQueue(tracks[i].id);
+                        }
+                    }
+                } else if (action === "start-mix") {
+                    startRadioMix({ type: "artist", artist: artistItem.artist });
+                }
+            });
+        });
+    }
+
+    card.addEventListener("click", () => {
+        openArtistDetail(artistItem.artist);
+    });
+    return card;
+}
+
+function createSearchMoodCardNode(moodItem) {
+    const card = document.createElement("div");
+    card.className = "search-mood-card";
+    card.setAttribute("role", "listitem");
+    card.dataset.mood = moodItem.name;
+    card.dataset.categoryType = moodItem.categoryType;
+
+    card.innerHTML = `
+        <div class="search-mood-card-header">
+            <span class="search-mood-type-pill">${moodItem.badge}</span>
+            <span class="search-mood-count">${moodItem.trackCount} ${moodItem.trackCount === 1 ? "track" : "tracks"}</span>
+        </div>
+        <div>
+            <h4 class="search-mood-title">${moodItem.name}</h4>
+            <p class="search-mood-sub">${moodItem.subtitle}</p>
+        </div>
+        <div class="card-quick-actions" role="group" aria-label="Vibe actions for ${moodItem.name}">
+            <button type="button" class="card-action-btn" data-search-mood-action="filter" title="Filter by ${moodItem.name}">
+                <span>Explore</span>
+            </button>
+            <button type="button" class="card-action-btn mix-action-btn" data-search-mood-action="start-mix" title="Start ${moodItem.name} Radio Mix">
+                <span>Start Mix</span>
+            </button>
+        </div>
+    `;
+
+    if (typeof card.querySelectorAll === "function") {
+        card.querySelectorAll("[data-search-mood-action]").forEach((btn) => {
+            btn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const action = btn.dataset.searchMoodAction;
+                if (action === "start-mix") {
+                    startRadioMix(moodItem.seedSpec);
+                } else {
+                    setSearchQuery(moodItem.name);
+                }
+            });
+        });
+    }
+
+    card.addEventListener("click", () => {
+        startRadioMix(moodItem.seedSpec);
+    });
+    return card;
+}
+
+function triggerTopResultPrimaryAction(topResult) {
+    if (!topResult) return null;
+    if (topResult.type === "song" && topResult.track) {
+        playMusic(topResult.track.id, false);
+        return topResult.track;
+    }
+    if (topResult.type === "artist" && topResult.tracks?.length) {
+        playMusic(topResult.tracks[0].id, false);
+        for (let i = 1; i < topResult.tracks.length; i++) {
+            addTrackToQueue(topResult.tracks[i].id);
+        }
+        return topResult.tracks[0];
+    }
+    if (topResult.type === "album" && topResult.tracks?.length) {
+        playMusic(topResult.tracks[0].id, false);
+        for (let i = 1; i < topResult.tracks.length; i++) {
+            addTrackToQueue(topResult.tracks[i].id);
+        }
+        return topResult.tracks[0];
+    }
+    return startRadioMix(topResult.seedSpec);
+}
+
+function triggerTopResultDetailAction(topResult) {
+    if (!topResult) return null;
+    if (topResult.type === "artist" && topResult.artist) {
+        return openArtistDetail(topResult.artist);
+    }
+    if (topResult.type === "album" && topResult.album) {
+        return openAlbumDetail(topResult.album);
+    }
+    if (topResult.type === "song" && topResult.track) {
+        return openSongDetail(topResult.track.id);
+    }
+    if ((topResult.type === "mood" || topResult.type === "genre") && topResult.mood) {
+        setMoodFilter(topResult.mood);
+        return topResult;
+    }
+    return startRadioMix(topResult.seedSpec);
+}
+
+function renderSearchView(resultsInput) {
+    const results = resultsInput || buildOmniSearchResults(activeSearchQuery);
+    activeSearchResults = results;
+
+    const searchView = document.getElementById("search-view");
+    const headingEl = document.getElementById("search-heading");
+    const eyebrowEl = document.getElementById("search-eyebrow");
+    const summaryEl = document.getElementById("search-summary");
+    const startMixBtn = document.getElementById("search-start-mix-btn");
+    const startMixLabel = document.getElementById("search-start-mix-label");
+    const playAllLabel = document.getElementById("search-play-all-label");
+
+    const topGridEl = document.getElementById("search-top-grid");
+    const topResultSection = document.getElementById("search-top-result-section");
+    const topResultScoreEl = document.getElementById("search-top-result-score");
+    const topResultCard = document.getElementById("search-top-result-card");
+    const topResultCover = document.getElementById("search-top-result-cover");
+    const topResultBadge = document.getElementById("search-top-result-badge");
+    const topResultTitle = document.getElementById("search-top-result-title");
+    const topResultSubtitle = document.getElementById("search-top-result-subtitle");
+    const topResultPills = document.getElementById("search-top-result-pills");
+    const topResultPlayLabel = document.getElementById("search-top-result-play-label");
+    const topResultMixLabel = document.getElementById("search-top-result-mix-label");
+    const topResultDetailLabel = document.getElementById("search-top-result-detail-label");
+
+    const songsSection = document.getElementById("search-songs-section");
+    const songsCountEl = document.getElementById("search-songs-count");
+    const songsListEl = document.getElementById("search-songs-list");
+
+    const artistsSection = document.getElementById("search-artists-section");
+    const artistsCountEl = document.getElementById("search-artists-count");
+    const artistsGridEl = document.getElementById("search-artists-grid");
+
+    const albumsSection = document.getElementById("search-albums-section");
+    const albumsCountEl = document.getElementById("search-albums-count");
+    const albumsGridEl = document.getElementById("search-albums-grid");
+
+    const moodsSection = document.getElementById("search-moods-section");
+    const moodsCountEl = document.getElementById("search-moods-count");
+    const moodsGridEl = document.getElementById("search-moods-grid");
+
+    const emptyStateEl = document.getElementById("search-empty-state");
+    const emptyTitleEl = document.getElementById("search-empty-title");
+
+    if (searchView) {
+        searchView.dataset.query = results.query;
+        searchView.dataset.category = activeSearchCategory;
+    }
+
+    // Sync category tab buttons
+    document.querySelectorAll("#search-category-tabs .search-cat-tab").forEach((tab) => {
+        const isSelected = (tab.dataset.searchTab || "all") === activeSearchCategory;
+        tab.classList.toggle("active", isSelected);
+        tab.setAttribute("aria-selected", String(isSelected));
+    });
+
+    // Header copy & Start Search Mix button label
+    if (eyebrowEl) {
+        eyebrowEl.textContent = results.isExploreMode
+            ? "OMNI-SEARCH & VIBE EXPLORER • HYBRID RADIO"
+            : `INSTANT OMNI-SEARCH • ${results.songs.length} SONGS • ${results.artists.length} ARTISTS • ${results.albums.length} ALBUMS`;
+    }
+    if (headingEl) {
+        headingEl.textContent = results.isExploreMode
+            ? "Explore & Search Catalog"
+            : `Results for "${results.query}"`;
+        headingEl.setAttribute("tabindex", "-1");
+    }
+    if (summaryEl) {
+        summaryEl.textContent = results.isExploreMode
+            ? `Browse all ${results.songs.length} tracks, ${results.artists.length} artists, ${results.albums.length} albums, and ${results.moods.length} genres & moods — or type above to filter live.`
+            : results.hasExactMatches
+              ? `Found ${results.songs.length} ${results.songs.length === 1 ? "song" : "songs"}, ${results.artists.length} ${results.artists.length === 1 ? "artist" : "artists"}, ${results.albums.length} ${results.albums.length === 1 ? "album" : "albums"}, and ${results.moods.length} ${results.moods.length === 1 ? "vibe" : "vibes"} — click Start Search Mix for a tailored endless station.`
+              : `No exact literal match for "${results.query}", but our hybrid engine prepared a ${results.seedTracks.length}-track sonic radio station for this query.`;
+    }
+    if (startMixLabel) {
+        startMixLabel.textContent = results.isExploreMode
+            ? "Start Supermix Radio"
+            : `Start "${results.query}" Mix`;
+    }
+    if (startMixBtn) {
+        startMixBtn.dataset.query = results.query;
+    }
+    if (playAllLabel) {
+        playAllLabel.textContent =
+            results.songs.length > 0
+                ? `Play Top ${Math.min(results.songs.length, 6)} Matches`
+                : "Play Recommended";
+    }
+
+    // Top Result Hero Card
+    const top = results.topResult;
+    if (top && topResultCard) {
+        topResultCard.dataset.topType = top.type;
+        topResultCard.dataset.topId = top.id;
+        if (topResultCover) {
+            topResultCover.src = top.coverUrl;
+            topResultCover.alt = top.title;
+        }
+        if (topResultBadge) {
+            topResultBadge.textContent = top.badge;
+        }
+        if (topResultTitle) {
+            topResultTitle.textContent = top.title;
+        }
+        if (topResultSubtitle) {
+            topResultSubtitle.textContent = top.subtitle;
+        }
+        if (topResultScoreEl) {
+            topResultScoreEl.textContent = top.matchReason || "Top match";
+        }
+        if (topResultPills) {
+            topResultPills.innerHTML = (top.pills || [])
+                .map((p) => `<span class="detail-meta-pill">${p}</span>`)
+                .join("");
+        }
+        if (topResultPlayLabel) {
+            topResultPlayLabel.textContent = top.playLabel || "Play";
+        }
+        if (topResultMixLabel) {
+            topResultMixLabel.textContent = top.mixLabel || "Start Mix";
+        }
+        if (topResultDetailLabel) {
+            topResultDetailLabel.textContent = top.detailLabel || "Details";
+        }
+    }
+
+    // Category visibility rules
+    const showTopResult = activeSearchCategory === "all" && Boolean(top);
+    const showSongs =
+        (activeSearchCategory === "all" || activeSearchCategory === "songs") &&
+        results.songs.length > 0;
+    const showArtists =
+        (activeSearchCategory === "all" || activeSearchCategory === "artists") &&
+        results.artists.length > 0;
+    const showAlbums =
+        (activeSearchCategory === "all" || activeSearchCategory === "albums") &&
+        results.albums.length > 0;
+    const showMoods =
+        (activeSearchCategory === "all" || activeSearchCategory === "moods") &&
+        results.moods.length > 0;
+
+    if (topResultSection) {
+        topResultSection.hidden = !showTopResult;
+    }
+    if (songsSection) {
+        songsSection.hidden = !showSongs;
+    }
+    if (topGridEl) {
+        topGridEl.hidden = !showTopResult && !showSongs;
+        topGridEl.classList.toggle("single-col", !showTopResult || !showSongs);
+    }
+
+    // Render Matching Songs List
+    const maxSongs = activeSearchCategory === "songs" ? results.songs.length : 6;
+    const visibleSongs = results.songs.slice(0, maxSongs);
+    if (songsCountEl) {
+        songsCountEl.textContent = `${results.songs.length} ${results.songs.length === 1 ? "song" : "songs"}`;
+    }
+    if (songsListEl) {
+        const songNodes = visibleSongs.map((t, idx) => createDetailTrackRowNode(t, idx));
+        songsListEl.replaceChildren(...songNodes);
+    }
+
+    // Render Matching Artists Grid
+    if (artistsSection) {
+        artistsSection.hidden = !showArtists;
+    }
+    if (artistsCountEl) {
+        artistsCountEl.textContent = `${results.artists.length} ${results.artists.length === 1 ? "artist" : "artists"}`;
+    }
+    if (artistsGridEl) {
+        const artistNodes = results.artists.map((a) => createSearchArtistCardNode(a));
+        artistsGridEl.replaceChildren(...artistNodes);
+    }
+
+    // Render Matching Albums Grid
+    if (albumsSection) {
+        albumsSection.hidden = !showAlbums;
+    }
+    if (albumsCountEl) {
+        albumsCountEl.textContent = `${results.albums.length} ${results.albums.length === 1 ? "album" : "albums"}`;
+    }
+    if (albumsGridEl) {
+        const albumNodes = results.albums.map((alb) =>
+            createDetailDiscographyCardNode({
+                ...alb,
+                relationLabel: alb.matchReason || `${alb.year} • ${alb.genre}`,
+            })
+        );
+        albumsGridEl.replaceChildren(...albumNodes);
+    }
+
+    // Render Matching Genres & Moods Grid
+    if (moodsSection) {
+        moodsSection.hidden = !showMoods;
+    }
+    if (moodsCountEl) {
+        moodsCountEl.textContent = `${results.moods.length} ${results.moods.length === 1 ? "vibe" : "vibes"}`;
+    }
+    if (moodsGridEl) {
+        const moodNodes = results.moods.map((m) => createSearchMoodCardNode(m));
+        moodsGridEl.replaceChildren(...moodNodes);
+    }
+
+    // Empty state fallback
+    if (emptyStateEl) {
+        emptyStateEl.hidden = results.hasExactMatches;
+        if (!results.hasExactMatches && emptyTitleEl) {
+            emptyTitleEl.textContent = `No exact catalog match for "${results.query}"`;
+        }
+    }
+
+    // Also update top navbar search mix button pill label
+    const navbarSearchMixBtn = document.getElementById("search-mix-btn");
+    if (navbarSearchMixBtn) {
+        navbarSearchMixBtn.title = results.query
+            ? `Start a nonstop radio mix from "${results.query}"`
+            : "Start a radio mix from current search or filter";
+    }
+
+    return results;
+}
+
+function openSearchView(queryInput, options = {}) {
+    if (queryInput !== undefined && queryInput !== null) {
+        activeSearchQuery = String(queryInput).trim();
+    }
+    if (options.category) {
+        activeSearchCategory = normalizeSearchCategory(options.category);
+    }
+
+    const searchInput = document.getElementById("search-input");
+    const searchClearBtn = document.getElementById("search-clear-btn");
+    if (searchInput && searchInput.value !== activeSearchQuery) {
+        searchInput.value = activeSearchQuery;
+    }
+    if (searchClearBtn) {
+        searchClearBtn.hidden = activeSearchQuery.length === 0;
+    }
+
+    activeView = "search";
+    activeDetail = null;
+
+    if (!options.skipHistory) {
+        pushNavState();
+    }
+
+    const detailView = document.getElementById("detail-view");
+    const searchView = document.getElementById("search-view");
+    const results = buildOmniSearchResults(activeSearchQuery);
+
+    const updateDom = () => {
+        setHomeSectionsHidden(true);
+        if (detailView) {
+            detailView.hidden = true;
+            detailView.setAttribute("aria-hidden", "true");
+            detailView.setAttribute("inert", "inert");
+        }
+        if (searchView) {
+            searchView.hidden = false;
+            searchView.setAttribute("aria-hidden", "false");
+            if (typeof searchView.removeAttribute === "function") {
+                searchView.removeAttribute("inert");
+            }
+        }
+        renderSearchView(results);
+        renderCatalogGrid();
+    };
+
+    if (options.instant) {
+        updateDom();
+    } else {
+        const focusTargetId = options.skipFocus
+            ? null
+            : options.focusHeading
+              ? "search-heading"
+              : "search-input";
+        runMainViewTransition(updateDom, focusTargetId);
+    }
+
+    syncPrimaryNavUI();
+    return results;
+}
+
+function closeSearchView(options = {}) {
+    if (options.clearQuery !== false) {
+        activeSearchQuery = "";
+        const searchInput = document.getElementById("search-input");
+        const searchClearBtn = document.getElementById("search-clear-btn");
+        if (searchInput) searchInput.value = "";
+        if (searchClearBtn) searchClearBtn.hidden = true;
+    }
+
+    activeView = "home";
+    activeDetail = null;
+
+    if (!options.skipHistory) {
+        pushNavState();
+    }
+
+    const detailView = document.getElementById("detail-view");
+    const searchView = document.getElementById("search-view");
+
+    runMainViewTransition(() => {
+        if (searchView) {
+            searchView.hidden = true;
+            searchView.setAttribute("aria-hidden", "true");
+            searchView.setAttribute("inert", "inert");
+        }
+        if (detailView) {
+            detailView.hidden = true;
+            detailView.setAttribute("aria-hidden", "true");
+            detailView.setAttribute("inert", "inert");
+        }
+        setHomeSectionsHidden(false);
+        renderCatalogGrid();
+    }, options.skipFocus ? null : "catalog-section-title");
+
+    syncPrimaryNavUI();
+    return true;
+}
+
+function setSearchQuery(queryInput, options = {}) {
+    const cleanQuery = String(queryInput ?? "").trim();
+    activeSearchQuery = cleanQuery;
+
+    const searchInput = document.getElementById("search-input");
+    const searchClearBtn = document.getElementById("search-clear-btn");
+    if (searchInput && !options.fromInput && searchInput.value !== cleanQuery) {
+        searchInput.value = cleanQuery;
+    }
+    if (searchClearBtn) {
+        searchClearBtn.hidden = cleanQuery.length === 0;
+    }
+
+    if (cleanQuery.length > 0 || options.keepSearchViewOpen) {
+        const results = openSearchView(cleanQuery, {
+            instant: true,
+            skipFocus: true,
+            skipHistory: Boolean(options.skipHistory),
+            category: options.category,
+        });
+        if (!options.silent) {
+            announceSearchStatus(
+                cleanQuery
+                    ? `Showing ${results.songs.length} songs, ${results.artists.length} artists, ${results.albums.length} albums, and ${results.moods.length} genres or moods for "${cleanQuery}"`
+                    : "Explore all songs, artists, albums, and moods"
+            );
+        }
+        return results;
+    }
+
+    // Query was cleared -> return to Home view unless explicitly staying in search
+    if (activeView === "search") {
+        closeSearchView({
+            clearQuery: true,
+            skipFocus: Boolean(options.fromInput || options.skipFocus),
+            skipHistory: Boolean(options.skipHistory),
+        });
+    } else {
+        if (!options.skipHistory) pushNavState();
+        renderCatalogGrid();
+    }
+    return buildOmniSearchResults("");
+}
+
+function setSearchCategory(category, options = {}) {
+    activeSearchCategory = normalizeSearchCategory(category);
+    if (!options.skipHistory && activeView === "search") {
+        pushNavState();
+    }
+    const results = renderSearchView(activeSearchResults || buildOmniSearchResults(activeSearchQuery));
+    if (!options.silent) {
+        announceSearchStatus(`Filtered search results to ${activeSearchCategory} category`);
+    }
+    return results;
+}
+
+/**
+ * Turns any active or provided search query into an endless tailored radio station.
+ */
+function startSearchMix(queryOrOptions, options = {}) {
+    let targetQuery = activeSearchQuery;
+    let mixOptions = { ...options };
+
+    if (typeof queryOrOptions === "string") {
+        targetQuery = queryOrOptions.trim();
+    } else if (queryOrOptions && typeof queryOrOptions === "object") {
+        if (typeof queryOrOptions.query === "string") {
+            targetQuery = queryOrOptions.query.trim();
+        }
+        mixOptions = { ...queryOrOptions, ...options };
+    }
+
+    const results = buildOmniSearchResults(targetQuery, {
+        moodFilter: mixOptions.moodFilter !== undefined ? mixOptions.moodFilter : activeMoodFilter,
+    });
+    activeSearchResults = results;
+
+    if (targetQuery) {
+        const seedTracks =
+            Array.isArray(mixOptions.tracks) && mixOptions.tracks.length > 0
+                ? mixOptions.tracks
+                : results.seedTracks;
+        return startRadioMix(
+            {
+                type: "search",
+                query: targetQuery,
+                tracks: seedTracks,
+                badge: "SEARCH MIX",
+                label: `Search Mix: "${targetQuery}"`,
+            },
+            mixOptions
+        );
+    }
+
+    if (activeMoodFilter && activeMoodFilter !== "All") {
+        return startRadioMix({ type: "mood", mood: activeMoodFilter }, mixOptions);
+    }
+    return startRadioMix({ type: "supermix" }, mixOptions);
+}
+
+function playTopSearchResult() {
+    const results = activeSearchResults || buildOmniSearchResults(activeSearchQuery);
+    return triggerTopResultPrimaryAction(results.topResult);
 }
 
 function setMoodFilter(mood) {
@@ -2958,6 +4351,9 @@ function setMoodFilter(mood) {
     }
     pushNavState();
     renderCatalogGrid();
+    if (activeView === "search") {
+        renderSearchView(buildOmniSearchResults(activeSearchQuery));
+    }
     renderDrawerQueue();
 }
 
@@ -3320,6 +4716,8 @@ function handleShellKeyDown(event) {
                 toggleShortcutsModal(false);
             } else if (activeView === "detail") {
                 closeDetailView();
+            } else if (activeView === "search") {
+                closeSearchView();
             }
         },
     };
@@ -3343,26 +4741,146 @@ function initShellControls() {
         });
     });
 
-    // 2. Top Search Input & Clear Button
+    // 2. Top Search Input & Clear Button (Instant Omni-Search)
     const searchInput = document.getElementById("search-input");
     const searchClearBtn = document.getElementById("search-clear-btn");
     if (searchInput) {
         searchInput.addEventListener("input", () => {
-            activeSearchQuery = searchInput.value.trim();
-            if (searchClearBtn) {
-                searchClearBtn.hidden = activeSearchQuery.length === 0;
-            }
-            pushNavState();
-            renderCatalogGrid();
+            setSearchQuery(searchInput.value, { fromInput: true });
         });
+        if (typeof searchInput.addEventListener === "function") {
+            searchInput.addEventListener("keydown", (e) => {
+                if (e.key === "Enter") {
+                    e.preventDefault();
+                    if (e.shiftKey) {
+                        startSearchMix();
+                    } else if (activeSearchResults?.topResult) {
+                        triggerTopResultPrimaryAction(activeSearchResults.topResult);
+                    } else {
+                        startSearchMix();
+                    }
+                } else if (e.key === "Escape") {
+                    if (activeSearchQuery.length > 0 || activeView === "search") {
+                        e.preventDefault();
+                        closeSearchView({ clearQuery: true });
+                    }
+                }
+            });
+        }
     }
     if (searchClearBtn && searchInput) {
         searchClearBtn.addEventListener("click", () => {
-            searchInput.value = "";
-            activeSearchQuery = "";
-            searchClearBtn.hidden = true;
-            pushNavState();
-            renderCatalogGrid();
+            closeSearchView({ clearQuery: true });
+        });
+    }
+
+    // 2b. Omni-Search View Controls (Back, Category Tabs, Start Search Mix, Play All, Queue All, Top Result Card)
+    const searchBackBtn = document.getElementById("search-back-btn");
+    if (searchBackBtn) {
+        searchBackBtn.addEventListener("click", () => {
+            closeSearchView({ clearQuery: true });
+        });
+    }
+
+    const searchCatTabs = Array.from(
+        document.querySelectorAll("#search-category-tabs .search-cat-tab")
+    );
+    searchCatTabs.forEach((tab, idx) => {
+        tab.addEventListener("click", () => {
+            setSearchCategory(tab.dataset.searchTab || "all");
+        });
+        if (typeof tab.addEventListener === "function") {
+            tab.addEventListener("keydown", (e) => {
+                if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+                    e.preventDefault();
+                    const dir = e.key === "ArrowRight" ? 1 : -1;
+                    const nextIdx = (idx + dir + searchCatTabs.length) % searchCatTabs.length;
+                    const nextTab = searchCatTabs[nextIdx];
+                    if (nextTab) {
+                        if (typeof nextTab.focus === "function") nextTab.focus();
+                        setSearchCategory(nextTab.dataset.searchTab || "all");
+                    }
+                }
+            });
+        }
+    });
+
+    const searchStartMixBtn = document.getElementById("search-start-mix-btn");
+    if (searchStartMixBtn) {
+        searchStartMixBtn.addEventListener("click", () => {
+            startSearchMix();
+        });
+    }
+
+    const searchPlayAllBtn = document.getElementById("search-play-all-btn");
+    if (searchPlayAllBtn) {
+        searchPlayAllBtn.addEventListener("click", () => {
+            const results = activeSearchResults || buildOmniSearchResults(activeSearchQuery);
+            const tracks = results.songs.length > 0 ? results.songs : results.seedTracks;
+            if (tracks.length > 0) {
+                playMusic(tracks[0].id, false);
+                for (let i = 1; i < Math.min(tracks.length, 6); i++) {
+                    addTrackToQueue(tracks[i].id);
+                }
+            }
+        });
+    }
+
+    const searchQueueAllBtn = document.getElementById("search-queue-all-btn");
+    if (searchQueueAllBtn) {
+        searchQueueAllBtn.addEventListener("click", () => {
+            const results = activeSearchResults || buildOmniSearchResults(activeSearchQuery);
+            const tracks = results.songs.length > 0 ? results.songs : results.seedTracks;
+            for (const t of tracks.slice(0, 8)) {
+                addTrackToQueue(t.id);
+            }
+        });
+    }
+
+    const topResultCard = document.getElementById("search-top-result-card");
+    const topResultPlayBtn = document.getElementById("search-top-result-play-btn");
+    const topResultMixBtn = document.getElementById("search-top-result-mix-btn");
+    const topResultDetailBtn = document.getElementById("search-top-result-detail-btn");
+
+    if (topResultPlayBtn) {
+        topResultPlayBtn.addEventListener("click", (e) => {
+            if (e && typeof e.stopPropagation === "function") e.stopPropagation();
+            const results = activeSearchResults || buildOmniSearchResults(activeSearchQuery);
+            triggerTopResultPrimaryAction(results.topResult);
+        });
+    }
+    if (topResultMixBtn) {
+        topResultMixBtn.addEventListener("click", (e) => {
+            if (e && typeof e.stopPropagation === "function") e.stopPropagation();
+            const results = activeSearchResults || buildOmniSearchResults(activeSearchQuery);
+            startRadioMix(results.topResult?.seedSpec || results.seedSpec);
+        });
+    }
+    if (topResultDetailBtn) {
+        topResultDetailBtn.addEventListener("click", (e) => {
+            if (e && typeof e.stopPropagation === "function") e.stopPropagation();
+            const results = activeSearchResults || buildOmniSearchResults(activeSearchQuery);
+            triggerTopResultDetailAction(results.topResult);
+        });
+    }
+    if (topResultCard) {
+        topResultCard.addEventListener("click", () => {
+            const results = activeSearchResults || buildOmniSearchResults(activeSearchQuery);
+            triggerTopResultDetailAction(results.topResult);
+        });
+    }
+
+    const searchEmptyMixBtn = document.getElementById("search-empty-mix-btn");
+    if (searchEmptyMixBtn) {
+        searchEmptyMixBtn.addEventListener("click", () => {
+            startSearchMix();
+        });
+    }
+
+    const searchEmptyResetBtn = document.getElementById("search-empty-reset-btn");
+    if (searchEmptyResetBtn) {
+        searchEmptyResetBtn.addEventListener("click", () => {
+            openSearchView("", { keepSearchViewOpen: true });
         });
     }
 
@@ -3414,10 +4932,13 @@ function initShellControls() {
             closeDetailView();
         });
     }
-    if (navSearch && searchInput) {
+    if (navSearch) {
         navSearch.addEventListener("click", (e) => {
             e.preventDefault();
-            searchInput.focus();
+            openSearchView(activeSearchQuery);
+            if (searchInput && typeof searchInput.focus === "function") {
+                searchInput.focus();
+            }
         });
     }
     if (navSupermix) {
@@ -3568,20 +5089,7 @@ function initShellControls() {
     const searchMixBtn = document.getElementById("search-mix-btn");
     if (searchMixBtn) {
         searchMixBtn.addEventListener("click", () => {
-            if (activeSearchQuery) {
-                startRadioMix({
-                    type: "search",
-                    query: activeSearchQuery,
-                    tracks: getFilteredSongs(),
-                });
-            } else if (activeMoodFilter && activeMoodFilter !== "All") {
-                startRadioMix({
-                    type: "mood",
-                    mood: activeMoodFilter,
-                });
-            } else {
-                startRadioMix({ type: "supermix" });
-            }
+            startSearchMix();
         });
     }
 
@@ -3603,20 +5111,7 @@ function initShellControls() {
         const el = document.getElementById(id);
         if (el) {
             el.addEventListener("click", () => {
-                if (activeSearchQuery) {
-                    startRadioMix({
-                        type: "search",
-                        query: activeSearchQuery,
-                        tracks: getFilteredSongs(),
-                    });
-                } else if (activeMoodFilter && activeMoodFilter !== "All") {
-                    startRadioMix({
-                        type: "mood",
-                        mood: activeMoodFilter,
-                    });
-                } else {
-                    startRadioMix({ type: "supermix" });
-                }
+                startSearchMix();
             });
         }
     }
@@ -4000,6 +5495,15 @@ window.SpotTubeShell = {
     closeDetailView,
     renderDetailView,
     startDetailMix,
+    buildOmniSearchResults,
+    searchCatalog,
+    renderSearchView,
+    openSearchView,
+    closeSearchView,
+    setSearchQuery,
+    setSearchCategory,
+    startSearchMix,
+    playTopSearchResult,
     navigateBack,
     navigateForward,
     getState: () => ({
@@ -4007,6 +5511,8 @@ window.SpotTubeShell = {
         currentTrackIndex,
         activeMoodFilter,
         activeSearchQuery,
+        activeSearchCategory,
+        activeSearchResults,
         activeLibraryFilter,
         activeMixMode,
         isDrawerOpen,
@@ -4026,6 +5532,9 @@ window.SpotTubeShell = {
         if (typeof patch.currentTrackIndex === "number") currentTrackIndex = patch.currentTrackIndex;
         if (typeof patch.activeMoodFilter === "string") activeMoodFilter = patch.activeMoodFilter;
         if (typeof patch.activeSearchQuery === "string") activeSearchQuery = patch.activeSearchQuery;
+        if (typeof patch.activeSearchCategory === "string") {
+            activeSearchCategory = normalizeSearchCategory(patch.activeSearchCategory);
+        }
         if (typeof patch.activeLibraryFilter === "string") activeLibraryFilter = patch.activeLibraryFilter;
         if (typeof patch.activeMixMode === "string") activeMixMode = normalizeMixMode(patch.activeMixMode);
         if (typeof patch.isDrawerOpen === "boolean") isDrawerOpen = patch.isDrawerOpen;

@@ -1521,6 +1521,364 @@ input {
     }
 }
 
+/* ==================== INSTANT OMNI-SEARCH VIEW (ITEM 9) ==================== */
+.search-view {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    padding-block-end: 18px;
+}
+
+.search-view[hidden] {
+    display: none;
+}
+
+.search-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.search-category-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.search-cat-tab {
+    border: 1px solid var(--border-subtle);
+    background-color: var(--bg-elevated);
+    color: var(--text-secondary);
+    font-size: 0.76rem;
+    font-weight: 700;
+    padding: 6px 13px;
+    border-radius: var(--radius-pill);
+    cursor: pointer;
+    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.search-cat-tab:hover {
+    background-color: var(--bg-elevated-hover);
+    color: var(--text-primary);
+}
+
+.search-cat-tab.active {
+    background-color: var(--text-primary);
+    color: #000;
+    border-color: var(--text-primary);
+}
+
+.search-hero-banner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 20px 22px;
+    border-radius: var(--radius-lg);
+    background:
+        radial-gradient(circle at 12% 20%, rgba(30, 215, 96, 0.22), transparent 52%),
+        radial-gradient(circle at 88% 15%, rgba(255, 0, 51, 0.2), transparent 48%),
+        linear-gradient(135deg, #171923 0%, #101218 100%);
+    border: 1px solid var(--border-highlight);
+    box-shadow: var(--shadow-elevated);
+}
+
+.search-hero-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-inline-size: 0;
+    flex: 1 1 320px;
+}
+
+.search-hero-title {
+    margin: 0;
+    font-size: clamp(1.35rem, 2.2vw, 1.95rem);
+    font-weight: 800;
+    line-height: 1.15;
+    color: var(--text-primary);
+    width: fit-content;
+}
+
+.search-hero-title:focus {
+    outline: none;
+}
+
+.search-hero-title:focus-visible {
+    outline: 2px solid var(--accent-spotify);
+    outline-offset: 4px;
+    border-radius: 6px;
+}
+
+.search-hero-subtitle {
+    margin: 0;
+    font-size: 0.86rem;
+    color: var(--text-secondary);
+}
+
+.search-hero-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+}
+
+.search-start-mix-btn svg,
+.search-play-all-btn svg {
+    inline-size: 16px;
+    block-size: 16px;
+}
+
+/* 2-Column Top Result + Matching Songs Layout */
+.search-top-grid {
+    display: grid;
+    grid-template-columns: minmax(275px, 380px) minmax(0, 1fr);
+    gap: 20px;
+    align-items: stretch;
+}
+
+.search-top-grid.single-col {
+    grid-template-columns: 1fr;
+}
+
+.search-top-result-section,
+.search-songs-section {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-inline-size: 0;
+}
+
+.search-top-result-section[hidden],
+.search-songs-section[hidden] {
+    display: none;
+}
+
+.search-top-result-card {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 20px;
+    border-radius: var(--radius-lg);
+    background:
+        radial-gradient(circle at 18% 18%, rgba(30, 215, 96, 0.16), transparent 58%),
+        var(--bg-card);
+    border: 1px solid var(--border-highlight);
+    cursor: pointer;
+    flex: 1 1 auto;
+    transition: background-color 0.18s ease, border-color 0.18s ease, transform 0.15s ease;
+}
+
+.search-top-result-card:hover {
+    background-color: var(--bg-card-hover);
+    border-color: rgba(30, 215, 96, 0.5);
+    transform: translateY(-2px);
+}
+
+.search-top-result-art-wrap {
+    position: relative;
+    inline-size: 108px;
+    block-size: 108px;
+}
+
+.search-top-result-cover {
+    inline-size: 100%;
+    block-size: 100%;
+    object-fit: cover;
+    border-radius: 12px;
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.6);
+    border: 1px solid var(--border-highlight);
+}
+
+.search-top-result-card[data-top-type="artist"] .search-top-result-cover {
+    border-radius: 50%;
+}
+
+.search-top-result-badge {
+    display: inline-block;
+    margin-block-start: 8px;
+    padding: 3px 10px;
+    border-radius: var(--radius-pill);
+    background-color: rgba(30, 215, 96, 0.16);
+    border: 1px solid rgba(30, 215, 96, 0.45);
+    color: var(--accent-spotify);
+    font-size: 0.64rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.search-top-result-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-block-start: 6px;
+}
+
+.search-top-result-title {
+    margin: 0;
+    font-size: 1.45rem;
+    font-weight: 800;
+    color: var(--text-primary);
+    line-height: 1.18;
+}
+
+.search-top-result-subtitle {
+    margin: 0;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.search-top-result-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.search-top-result-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-block-start: 6px;
+}
+
+.search-top-play-btn,
+.search-top-mix-btn,
+.search-top-detail-btn {
+    padding: 8px 14px;
+    font-size: 0.78rem;
+}
+
+.search-top-play-btn svg,
+.search-top-mix-btn svg {
+    inline-size: 14px;
+    block-size: 14px;
+}
+
+/* Search Entity Grids (Artists, Albums, Genres & Moods) */
+.search-entity-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(185px, 1fr));
+    gap: 14px;
+}
+
+.search-artist-card .detail-card-cover {
+    border-radius: 50%;
+}
+
+.search-moods-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    gap: 12px;
+}
+
+.search-mood-card {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 14px 16px;
+    border-radius: 12px;
+    background:
+        radial-gradient(circle at 85% 20%, rgba(30, 215, 96, 0.2), transparent 55%),
+        linear-gradient(135deg, #1b1e2b 0%, #12141c 100%);
+    border: 1px solid var(--border-highlight);
+    cursor: pointer;
+    transition: transform 0.15s ease, border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.search-mood-card:hover {
+    transform: translateY(-2px);
+    border-color: rgba(30, 215, 96, 0.55);
+}
+
+.search-mood-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.search-mood-type-pill {
+    font-size: 0.62rem;
+    font-weight: 800;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    border-radius: var(--radius-pill);
+    background-color: rgba(30, 215, 96, 0.16);
+    color: var(--accent-spotify);
+}
+
+.search-mood-count {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--text-muted);
+}
+
+.search-mood-title {
+    margin: 0;
+    font-size: 1.05rem;
+    font-weight: 800;
+    color: var(--text-primary);
+}
+
+.search-mood-sub {
+    margin: 0;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: clip;
+    text-overflow: ellipsis;
+}
+
+.search-empty-state[hidden] {
+    display: none;
+}
+
+.search-empty-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 10px;
+    padding: 28px 20px;
+    border-radius: var(--radius-lg);
+    background-color: var(--bg-card);
+    border: 1px dashed var(--border-highlight);
+}
+
+.search-empty-card h3 {
+    margin: 0;
+    font-size: 1.15rem;
+    color: var(--text-primary);
+}
+
+.search-empty-card p {
+    margin: 0;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    max-width: 520px;
+}
+
+.search-empty-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
+    margin-block-start: 6px;
+}
+
+@media screen and (max-width: 980px) {
+    .search-top-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
 /* Footer */
 .footer {
     padding: 28px 18px 16px;
