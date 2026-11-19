@@ -289,7 +289,46 @@
         /**
          * Preloads the next upcoming track onto the inactive standby deck for gapless or crossfaded start.
          */
+        // ==================== ITEM 14: ON-DEMAND URLS FOR NO-COPY LINKED TRACKS ====================
+        // A track linked to a picked folder has no audioUrl until it is played. `options.resolveTrackUrl(track, ctx)`
+        // returns (a promise of) a blob: URL or null; the action then runs with the URL filled in.
+        const pendingResolves = new Map();
+
+        function needsResolvedUrl(track) {
+            return Boolean(track && !track.audioUrl && typeof options.resolveTrackUrl === "function");
+        }
+
+        function resolveTrackUrlThen(track, run, ctx = {}) {
+            const key = `${track.id}|${ctx.reason || "play"}`;
+            if (pendingResolves.has(key)) return pendingResolves.get(key);
+            const pending = Promise.resolve()
+                .then(() => options.resolveTrackUrl(track, ctx))
+                .catch(() => null)
+                .then((url) => {
+                    pendingResolves.delete(key);
+                    if (url) {
+                        track.audioUrl = url;
+                        return run();
+                    }
+                    if (!ctx.silent) {
+                        emit("track-unavailable", { track, reason: ctx.reason || "play" });
+                        if (typeof options.onTrackUnavailable === "function") {
+                            try {
+                                options.onTrackUnavailable(track, ctx);
+                            } catch (_) {}
+                        }
+                    }
+                    return null;
+                });
+            pendingResolves.set(key, pending);
+            return pending;
+        }
+
         function preloadNextTrack(nextTrack) {
+            if (needsResolvedUrl(nextTrack)) {
+                resolveTrackUrlThen(nextTrack, () => preloadNextTrack(nextTrack), { reason: "preload", silent: true });
+                return null;
+            }
             if (!nextTrack || !nextTrack.audioUrl) return null;
             if (crossfadeState.active) return preloadedTrack;
 
@@ -417,6 +456,10 @@
          */
         function beginCrossfade(nextTrack, optionsOverride = {}) {
             if (!nextTrack) return null;
+            if (needsResolvedUrl(nextTrack)) {
+                resolveTrackUrlThen(nextTrack, () => beginCrossfade(nextTrack, optionsOverride), { reason: "crossfade" });
+                return null;
+            }
 
             const fadeDuration = clamp(
                 Number(optionsOverride.durationSeconds ?? crossfadeSeconds),
@@ -547,6 +590,13 @@
          */
         function loadAndPlayTrack(track, playOptions = {}) {
             if (!track) return null;
+            if (needsResolvedUrl(track)) {
+                resolveTrackUrlThen(track, () => loadAndPlayTrack(track, playOptions), {
+                    reason: playOptions.reason || "play",
+                    userInitiated: playOptions.userInitiated !== false,
+                });
+                return track;
+            }
 
             cancelActiveCrossfade(true);
 

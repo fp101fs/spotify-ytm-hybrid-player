@@ -223,7 +223,7 @@
                         </div>
                         <div class="home-add-music-copy">
                             <h2 id="home-add-music-title">Add your music folder</h2>
-                            <p>Play songs from your computer. They show up right away, and nothing is uploaded: files stay in this browser.</p>
+                            <p>Play songs from your computer. They show up right away and nothing is uploaded. In Chrome and Edge they play straight from the folder.</p>
                         </div>
                         <button type="button" class="hero-primary-btn home-add-music-btn" id="home-add-music-btn" data-add-music="folder">Add a folder…</button>
                     </section>
@@ -392,6 +392,10 @@
                                         <button type="button" class="detail-row-btn" id="import-cancel-btn">Cancel</button>
                                     </div>
                                 </div>
+                                <section class="local-sources" id="local-sources" aria-labelledby="local-sources-title" hidden>
+                                    <h3 class="local-sources-title" id="local-sources-title" tabindex="-1">Where your songs come from</h3>
+                                    <ul class="local-sources-list" id="local-sources-list"></ul>
+                                </section>
                                 <p class="detail-empty-hint" id="detail-empty-hint" hidden></p>
                             </div>
                         </header>
@@ -854,7 +858,7 @@
             <div class="drop-overlay-card">
                 <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a.75.75 0 0 1 .75.75v6.69l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.5 3.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 0 1 1.06-1.06l2.22 2.22V1.75A.75.75 0 0 1 8 1zm-5.5 11a.75.75 0 0 1 .75.75v1h9.5v-1a.75.75 0 0 1 1.5 0v1.75a.75.75 0 0 1-.75.75h-11a.75.75 0 0 1-.75-.75V12.75A.75.75 0 0 1 2.5 12z"/></svg>
                 <strong>Drop to import</strong>
-                <span>MP3, FLAC, WAV, M4A or OGG &mdash; files or whole folders. Stored only in this browser.</span>
+                <span>MP3, FLAC, WAV, M4A or OGG &mdash; files or whole folders. Copied into this browser; nothing is uploaded.</span>
             </div>
         </div>
 
@@ -882,6 +886,7 @@
                 <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg>
                 <span>Add files…</span>
             </button>
+            <div class="add-music-source-items" id="add-music-source-items" role="group" aria-label="Your linked folders" hidden></div>
             <button type="button" class="add-music-item" role="menuitem" tabindex="-1" id="add-music-playlist-item" data-add-music="playlist" hidden>
                 <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M15.25 8a.75.75 0 0 1-.75.75H8.75v5.75a.75.75 0 0 1-1.5 0V8.75H1.5a.75.75 0 0 1 0-1.5h5.75V1.5a.75.75 0 0 1 1.5 0v5.75h5.75a.75.75 0 0 1 .75.75z"/></svg>
                 <span>New playlist</span>

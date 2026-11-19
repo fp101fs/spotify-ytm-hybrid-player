@@ -1259,6 +1259,8 @@
             }
         };
 
+        // Item 14: { linkSource: { id } } saves metadata + relative path only (no copy); audio stays in the folder
+        const linkSourceId = options.linkSource && options.linkSource.id ? String(options.linkSource.id) : "";
         const tracks = [];
         const skipped = [];
         const duplicates = [];
@@ -1299,7 +1301,15 @@
                 duration: 0,
                 durationFormatted: "",
                 createdAt: batchCreatedAt,
+                storageMode: linkSourceId ? "linked" : "copy",
             });
+            if (linkSourceId) {
+                placeholder.sourceId = linkSourceId;
+                placeholder.relativePath = String(relativePath || name);
+                if (storage && typeof storage.setLinkedTrackUrl === "function" && audioUrl) {
+                    storage.setLinkedTrackUrl(placeholder.id, audioUrl);
+                }
+            }
             tracks.push(placeholder);
             jobs.push({ file, info, track: placeholder });
         }
@@ -1338,7 +1348,18 @@
             if (cancelled) return;
             try {
                 if (storage && typeof storage.saveImportedTrack === "function") {
-                    const stored = await storage.saveImportedTrack({ ...meta, createdAt: job.track.createdAt }, job.file);
+                    const record = {
+                        ...meta,
+                        createdAt: job.track.createdAt,
+                        importKey: job.track.importKey,
+                        lastModified: job.info.lastModified,
+                    };
+                    if (linkSourceId) {
+                        record.storageMode = "linked";
+                        record.sourceId = linkSourceId;
+                        record.relativePath = job.track.relativePath;
+                    }
+                    const stored = await storage.saveImportedTrack(record, linkSourceId ? null : job.file);
                     meta = { ...meta, ...stored };
                 }
             } catch (err) {
@@ -1352,7 +1373,16 @@
             }
             // Keep the placeholder's session URL so a row that is already playing isn't reloaded
             const audioUrl = job.track.audioUrl;
-            Object.assign(job.track, meta, { audioUrl, importStatus: "ready", importKey: job.track.importKey });
+            Object.assign(job.track, meta, {
+                audioUrl,
+                importStatus: "ready",
+                importKey: job.track.importKey,
+                storageMode: job.track.storageMode,
+            });
+            if (linkSourceId) {
+                job.track.sourceId = linkSourceId;
+                job.track.relativePath = job.track.relativePath || job.info.relativePath;
+            }
             imported.push(job.track);
             completed++;
             emit("onTrackUpdated", job.track);
@@ -1366,6 +1396,47 @@
             return { imported, duplicates, skipped: skipped.concat(failed), removed, cancelled, total: jobs.length };
         })();
         return controller;
+    }
+
+    /**
+     * Item 14 Rescan: compares a linked folder's saved tracks with a fresh walk of the folder.
+     * Matches by relative path; a file whose size changed counts as removed + added so its tags are re-read.
+     * → { added: [{ file, relativePath }], removed: [track], kept: [track] }
+     */
+    function diffFolderScan(existingTracks = [], scannedEntries = []) {
+        const scanned = new Map();
+        for (const item of normalizeFileInputs(scannedEntries)) {
+            if (!isSupportedAudioFile(item.file) || /^\./.test(String(item.file.name || ""))) continue;
+            scanned.set(String(item.relativePath), item);
+        }
+        const kept = [];
+        const removed = [];
+        const keptPaths = new Set();
+        for (const track of existingTracks) {
+            const item = scanned.get(String(track.relativePath || ""));
+            const sameSize = item && (!Number(track.size) || Number(item.file.size) === Number(track.size));
+            if (item && sameSize) {
+                kept.push(track);
+                keptPaths.add(String(track.relativePath));
+            } else {
+                removed.push(track);
+            }
+        }
+        const added = [];
+        for (const [relativePath, item] of scanned) {
+            if (!keptPaths.has(relativePath)) added.push(item);
+        }
+        return { added, removed, kept };
+    }
+
+    /** Toast text for a Rescan, e.g. "Rescanned “Music” · 3 added · 1 removed". */
+    function summarizeRescan(sourceName, diff = {}) {
+        const added = (diff.added || []).length;
+        const removed = (diff.removed || []).length;
+        const parts = [];
+        if (added) parts.push(`${added} added`);
+        if (removed) parts.push(`${removed} removed`);
+        return `Rescanned “${sanitizeTagText(sourceName || "folder", 80)}” · ${parts.length ? parts.join(" · ") : "no changes"}`;
     }
 
     /** Toast text for a finished instant import, e.g. "Added 498 songs · 2 skipped". */
@@ -1452,6 +1523,8 @@
         buildImportedTrackMeta,
         collectFilesFromDataTransfer,
         collectFilesFromDirectoryHandle,
+        diffFolderScan,
+        summarizeRescan,
         probeDurationWithMediaElement,
         importAudioFiles,
         summarizeImportResult,

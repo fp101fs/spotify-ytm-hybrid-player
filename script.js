@@ -74,6 +74,9 @@ function getPlayerEngine() {
         getQueueManager,
         crossfadeSeconds,
         minQueueSize: 3,
+        // Item 14: linked (no-copy) tracks get their blob: URL from the folder at play time
+        resolveTrackUrl: (track, ctx = {}) => resolveTrackAudioUrl(track, { request: ctx.reason === "play" && ctx.userInitiated !== false }),
+        onTrackUnavailable: (track) => handleUnavailableTrack(track),
         onTrackChange(nextTrack, detail = {}) {
             if (detail.activeDeck) {
                 currentSong = detail.activeDeck;
@@ -378,7 +381,7 @@ const playMusic = (trackOrIndex, pause = false, options = {}) => {
     // Synchronize the live queue manager unless playMusic was invoked by startRadioMix or queue advance
     if (qm && !options.skipQueueSync) {
         qm.setCurrentTrack(track, {
-            catalog: songs,
+            catalog: getQueueCatalog(),
             regenerateMix: true,
             preserveManual: true,
             silent: true,
@@ -402,6 +405,13 @@ const playMusic = (trackOrIndex, pause = false, options = {}) => {
         return;
     }
 
+    if (track.storageMode === "linked" && !track.audioUrl) {
+        resolveTrackAudioUrl(track, { request: true }).then((url) => {
+            if (url) playMusic(track, pause, options);
+            else handleUnavailableTrack(track);
+        });
+        return;
+    }
     currentSong.src = track.audioUrl;
     if (!pause) {
         activePlaybackTrackId = track.id;
@@ -438,7 +448,7 @@ function startRadioMix(seedSpec = null, options = {}) {
 
     if (qm && typeof qm.startMix === "function") {
         const result = qm.startMix(seedSpec, {
-            catalog: songs,
+            catalog: getQueueCatalog(),
             mixMode: options.mixMode || activeMixMode,
             moodFilter: options.moodFilter || activeMoodFilter,
             keepCurrentTrack: Boolean(options.keepCurrentTrack),
@@ -589,17 +599,17 @@ function ensureQueueCatalogSynced() {
     const state = qm.getState();
     const activeTrack = songs[currentTrackIndex] || songs[0];
 
-    if (!state.catalog || state.catalog.length !== songs.length) {
-        qm.setCatalog(songs, { rebuildQueue: false, silent: true });
+    if (!state.catalog || state.catalog.length !== getQueueCatalog().length) {
+        qm.setCatalog(getQueueCatalog(), { rebuildQueue: false, silent: true });
         qm.setCurrentTrack(activeTrack, {
-            catalog: songs,
+            catalog: getQueueCatalog(),
             regenerateMix: true,
             recordHistory: false,
             silent: true,
         });
     } else if (!state.currentTrack || state.currentTrack.id !== activeTrack.id) {
         qm.setCurrentTrack(activeTrack, {
-            catalog: songs,
+            catalog: getQueueCatalog(),
             regenerateMix: true,
             recordHistory: false,
             silent: true,
@@ -6843,7 +6853,7 @@ async function main() {
 
     const qm = getQueueManager();
     if (qm && typeof qm.setCatalog === "function") {
-        qm.setCatalog(songs, { rebuildQueue: true, silent: true });
+        qm.setCatalog(getQueueCatalog(), { rebuildQueue: true, silent: true });
     }
 
     renderCatalogGrid();
@@ -6851,6 +6861,7 @@ async function main() {
     renderLibrarySidebar();
     initShellControls();
     initLibraryImportControls();
+    await initFolderSources();
     playMusic(0, true);
 
     const playBtn = document.getElementById("play");
@@ -7060,9 +7071,10 @@ function updateLocalFilesCount() {
     const el = document.getElementById("lib-local-count");
     if (!el) return;
     const count = getImportedLocalTracks().length;
+    const needsReconnect = folderSources.some((src) => getFolderSourceStatus(src.id) !== "granted");
     el.textContent =
         count > 0
-            ? `Local • ${count} ${count === 1 ? "file" : "files"} in this browser`
+            ? `Local • ${count} ${count === 1 ? "file" : "files"}${needsReconnect ? " · reconnect needed" : ""}`
             : "Drop MP3, FLAC or WAV to import";
 }
 
@@ -7083,7 +7095,7 @@ function mergeImportedTracks(tracks = []) {
 function refreshLibraryViews(options = {}) {
     const qm = getQueueManager();
     if (qm && typeof qm.setCatalog === "function" && songs.length) {
-        qm.setCatalog(songs, { rebuildQueue: false, silent: true });
+        qm.setCatalog(getQueueCatalog(), { rebuildQueue: false, silent: true });
     }
     renderCatalogGrid();
     // Home shelves run the recommender over the whole catalog; an instant import skips them until it finishes
@@ -7118,6 +7130,7 @@ async function importLocalAudioFiles(fileInputs, options = {}) {
         existingIds: songs.map((t) => t.id),
         probeDuration: options.probeDuration,
         concurrency: options.concurrency,
+        linkSource: options.linkSource || null,
         onTrackUpdated: (track) => queueImportRowUpdate(track),
         onTrackFailed: (track) => {
             removeTracksFromCatalog([track.id]);
@@ -7156,7 +7169,7 @@ async function importLocalAudioFiles(fileInputs, options = {}) {
     mergeImportedTracks(controller.tracks);
     // Light refresh while the rows are new; the full refresh (grid, shelves, sidebar) runs when tags are done
     const qmNow = getQueueManager();
-    if (qmNow && typeof qmNow.setCatalog === "function") qmNow.setCatalog(songs, { rebuildQueue: false, silent: true });
+    if (qmNow && typeof qmNow.setCatalog === "function") qmNow.setCatalog(getQueueCatalog(), { rebuildQueue: false, silent: true });
     updateLocalFilesCount();
     updateHomeAddMusicCard();
     if (options.openCollection === false) refreshActiveCollectionView();
@@ -7173,7 +7186,8 @@ async function importLocalAudioFiles(fileInputs, options = {}) {
     refreshLibraryViews();
     updateImportProgressUi();
 
-    const summary = lib.summarizeInstantImport(result);
+    if (options.linkSource) refreshFolderSourcesUi();
+    const summary = typeof options.summarize === "function" ? options.summarize(result) : lib.summarizeInstantImport(result);
     const details = [...result.skipped, ...result.duplicates];
     showLibraryToast(summary, {
         error: result.imported.length === 0 && details.length > 0,
@@ -7222,9 +7236,8 @@ function openImportPicker(options = {}) {
             .showDirectoryPicker({ id: "spottube-import", mode: "read" })
             .then((handle) => {
                 pickedName = handle && handle.name ? String(handle.name) : "";
-                return lib.collectFilesFromDirectoryHandle(handle);
+                return importFromFolderHandle(handle, { sourceName: pickedName || undefined });
             })
-            .then((entries) => importLocalAudioFiles(entries, { sourceName: pickedName || undefined }))
             .catch((err) => {
                 const name = err && err.name;
                 if (name === "AbortError") return null; // picker cancelled: nothing happens
@@ -7405,9 +7418,9 @@ function buildCollectionDetailData(spec = {}) {
             .map(([t]) => t);
         id = "local";
         title = "Local Files";
-        description = "Audio imported from your device. Stored only in this browser (IndexedDB).";
+        description = "Songs from your device. Linked folders play straight from your disk; added files are copied into this browser. Nothing is uploaded.";
         badge = "LOCAL FILES";
-        eyebrow = "IMPORTED IN THIS BROWSER";
+        eyebrow = "FROM YOUR DEVICE";
         tracklistTitle = "Imported Files";
         mixLabel = "Start Local Mix";
         emptyHint = "Use “+ Add Music” to pick a folder or files, or drag MP3, FLAC or WAV files (or whole folders) anywhere onto the app.";
@@ -7547,6 +7560,7 @@ function renderDetailCollectionChrome(detailData) {
     }
     if (discographySection) discographySection.hidden = isCollection;
     updateImportProgressUi();
+    renderLocalSourcesPanel();
     if (similarSection) similarSection.hidden = isCollection && !(detailData.similarTracks || []).length;
 }
 
@@ -7739,6 +7753,7 @@ function setDropOverlayVisible(visible) {
 }
 
 function initLibraryImportControls() {
+    initFolderSourceControls();
     const fileInput = document.getElementById("import-file-input");
     const folderInput = document.getElementById("import-folder-input");
     const onInputChange = (e) => {
@@ -8340,7 +8355,494 @@ function initAddMusicControls() {
     updateHomeAddMusicCard();
 }
 
+
+// ==================== ITEM 14: PLAY STRAIGHT FROM THE PICKED FOLDER (NO COPY) ====================
+// Where showDirectoryPicker exists, a picked folder is saved as a FileSystemDirectoryHandle and its songs keep
+// only metadata + a relative path. Audio is read from disk at play time. After a reload the browser forgets the
+// permission, so Local Files and the Add Music menu offer "Reconnect", plus "Rescan" for added/removed files.
+// Drag-and-drop, <input> pickers and Safari/Firefox keep copying into IndexedDB.
+
+let folderSources = []; // { id, name, handle, createdAt } from storage
+const folderSourceStatus = new Map(); // id -> "granted" | "prompt" | "denied" | "missing"
+const forgetConfirmTimers = new Map();
+
+function getFolderSourceStatus(sourceId) {
+    return folderSourceStatus.get(sourceId) || "prompt";
+}
+
+function getFolderSourceTracks(sourceId) {
+    return songs.filter((t) => t && t.isLocalImport && t.storageMode === "linked" && t.sourceId === sourceId);
+}
+
+/** A linked track whose folder isn't readable right now can't autoplay, so mixes and the queue leave it out. */
+function isTrackWaitingForFolder(track) {
+    return Boolean(track && track.storageMode === "linked" && !track.audioUrl && getFolderSourceStatus(track.sourceId) !== "granted");
+}
+
+let queueCatalogCache = { songsRef: null, length: -1, statusKey: "", catalog: null };
+function getQueueCatalog() {
+    const statusKey = Array.from(folderSourceStatus.entries()).map(([k, v]) => `${k}:${v}`).join(",");
+    if (
+        queueCatalogCache.songsRef === songs &&
+        queueCatalogCache.length === songs.length &&
+        queueCatalogCache.statusKey === statusKey
+    ) {
+        return queueCatalogCache.catalog;
+    }
+    const waiting = songs.some(isTrackWaitingForFolder);
+    const catalog = waiting ? songs.filter((t) => !isTrackWaitingForFolder(t)) : songs;
+    queueCatalogCache = { songsRef: songs, length: songs.length, statusKey, catalog };
+    return catalog;
+}
+
+function syncQueueCatalog() {
+    const qm = getQueueManager();
+    if (qm && typeof qm.setCatalog === "function" && songs.length) {
+        qm.setCatalog(getQueueCatalog(), { rebuildQueue: false, silent: true });
+    }
+}
+
+function setFolderSourceStatus(sourceId, status) {
+    const before = folderSourceStatus.get(sourceId);
+    folderSourceStatus.set(sourceId, status);
+    if (before !== status) {
+        syncQueueCatalog();
+        refreshFolderSourcesUi();
+    }
+}
+
+/** Loads saved folders and asks (without prompting) whether each one is still readable. Called from main(). */
+async function initFolderSources() {
+    const store = getStorage();
+    if (!store || typeof store.getFolderSources !== "function") return [];
+    try {
+        folderSources = await store.getFolderSources();
+    } catch (_) {
+        folderSources = [];
+    }
+    for (const source of folderSources) {
+        let status = "prompt";
+        try {
+            status = await store.getFolderPermission(source);
+        } catch (_) {}
+        folderSourceStatus.set(source.id, status);
+    }
+    // Linked tracks whose folder record is gone can never play again
+    for (const t of getImportedLocalTracks()) {
+        if (t.storageMode === "linked" && !folderSources.some((src) => src.id === t.sourceId)) {
+            folderSourceStatus.set(t.sourceId, "missing");
+        }
+    }
+    syncQueueCatalog();
+    refreshFolderSourcesUi();
+    return folderSources;
+}
+
+/**
+ * Item 14 entry for showDirectoryPicker: reuse the saved source when the same folder is picked again
+ * (that becomes a Rescan), otherwise save the handle and import without copying.
+ */
+async function importFromFolderHandle(handle, options = {}) {
+    const lib = getLibraryModule();
+    const store = getStorage();
+    if (!lib || !handle) return null;
+    const canLink = store && typeof store.saveFolderSource === "function";
+    if (!canLink) {
+        const entries = await lib.collectFilesFromDirectoryHandle(handle);
+        return importLocalAudioFiles(entries, { sourceName: options.sourceName });
+    }
+    const existing = await store.findFolderSourceForHandle(handle);
+    if (existing) {
+        // The user just picked it, so it's readable; keep the newest handle
+        const updated = await store.saveFolderSource({ ...existing, handle, name: handle.name || existing.name });
+        upsertFolderSource(updated);
+        folderSourceStatus.set(updated.id, "granted");
+        return rescanFolderSource(updated.id, { skipPermission: true, openCollection: true });
+    }
+    const source = await store.saveFolderSource({ name: String(handle.name || options.sourceName || "Folder"), handle });
+    upsertFolderSource(source);
+    folderSourceStatus.set(source.id, "granted");
+    const entries = await lib.collectFilesFromDirectoryHandle(handle);
+    const result = await importLocalAudioFiles(entries, {
+        ...options,
+        sourceName: options.sourceName || source.name,
+        linkSource: source,
+    });
+    // Nothing usable in it: don't keep an empty folder link around
+    if (result && !getFolderSourceTracks(source.id).length) {
+        await store.deleteFolderSource(source.id);
+        folderSources = folderSources.filter((src) => src.id !== source.id);
+        folderSourceStatus.delete(source.id);
+        refreshFolderSourcesUi();
+    }
+    return result;
+}
+
+function upsertFolderSource(source) {
+    if (!source) return;
+    const idx = folderSources.findIndex((src) => src.id === source.id);
+    if (idx >= 0) folderSources[idx] = source;
+    else folderSources.push(source);
+}
+
+/** Resolves (and caches on the track) a playable URL. Returns the URL or null. */
+async function resolveTrackAudioUrl(track, options = {}) {
+    if (!track) return null;
+    if (track.audioUrl) return track.audioUrl;
+    if (track.storageMode !== "linked") return null;
+    const store = getStorage();
+    if (!store || typeof store.resolveLinkedTrackUrl !== "function") return null;
+    const result = await store.resolveLinkedTrackUrl(track, { request: Boolean(options.request) });
+    const catalogTrack = songs.find((t) => t.id === track.id);
+    if (result.status === "ok" && result.url) {
+        track.audioUrl = result.url;
+        if (catalogTrack && catalogTrack !== track) catalogTrack.audioUrl = result.url;
+        setFolderSourceStatus(track.sourceId, "granted");
+        return result.url;
+    }
+    track.unavailableReason = result.status;
+    if (catalogTrack && catalogTrack !== track) catalogTrack.unavailableReason = result.status;
+    if (result.status === "prompt" || result.status === "denied" || result.status === "missing") {
+        setFolderSourceStatus(track.sourceId, result.status);
+    }
+    return null;
+}
+
+function handleUnavailableTrack(track) {
+    if (!track) return;
+    const source = folderSources.find((src) => src.id === track.sourceId);
+    const name = source ? source.name : "its folder";
+    const reason = track.unavailableReason;
+    if (reason === "not-found") {
+        const message = `Couldn't find “${track.title}” in “${name}”. It may have been moved or deleted.`;
+        showLibraryToast(message, {
+            error: true,
+            timeoutMs: 0,
+            action: source ? { label: "Rescan folder", onClick: () => rescanFolderSource(source.id) } : null,
+        });
+        announceImport(message);
+        return;
+    }
+    if (reason === "missing" || !source) {
+        const message = `“${track.title}” can't play because its folder is no longer linked. Add the folder again.`;
+        showLibraryToast(message, { error: true, timeoutMs: 0, action: { label: "Add a folder…", onClick: () => openImportPicker({ folder: true }) } });
+        announceImport(message);
+        return;
+    }
+    const message =
+        reason === "denied"
+            ? `The browser blocked access to “${name}”. Allow it to play these songs.`
+            : `“${name}” needs your permission again to play its songs.`;
+    showLibraryToast(message, {
+        error: true,
+        timeoutMs: 0,
+        action: { label: "Reconnect folder", onClick: () => reconnectFolderSource(source.id) },
+    });
+    announceImport(message);
+}
+
+/** Asks the browser for read access again (needs the click that called it). Returns the new status. */
+async function reconnectFolderSource(sourceId, options = {}) {
+    const store = getStorage();
+    const source = folderSources.find((src) => src.id === sourceId);
+    if (!store || !source) return "missing";
+    announceImport(`Asking the browser for access to “${source.name}”…`);
+    let status = "prompt";
+    try {
+        status = await store.getFolderPermission(source, { request: true });
+    } catch (_) {}
+    setFolderSourceStatus(sourceId, status);
+    const count = getFolderSourceTracks(sourceId).length;
+    if (status === "granted") {
+        const message = `Reconnected “${source.name}”. ${count} ${count === 1 ? "song is" : "songs are"} ready to play.`;
+        announceImport(message);
+        showLibraryToast(message);
+        updateLocalFilesCount();
+        refreshFolderSourcesUi();
+        focusFolderSourceControl(sourceId, "rescan", options.returnFocus);
+    } else {
+        const message =
+            status === "denied"
+                ? `The browser blocked access to “${source.name}”. Allow file access for this site in the browser's site settings, then try again.`
+                : `“${source.name}” is still waiting for permission.`;
+        announceImport(message);
+        showLibraryToast(message, {
+            error: true,
+            timeoutMs: 0,
+            action: { label: "Try again", onClick: () => reconnectFolderSource(sourceId, options) },
+        });
+        focusFolderSourceControl(sourceId, "reconnect", options.returnFocus);
+    }
+    return status;
+}
+
+/** Re-walks a linked folder: imports new files, drops ones that are gone. Resolves to the diff. */
+async function rescanFolderSource(sourceId, options = {}) {
+    const lib = getLibraryModule();
+    const store = getStorage();
+    const source = folderSources.find((src) => src.id === sourceId);
+    if (!lib || !store || !source || !source.handle) return null;
+    if (!options.skipPermission) {
+        const status = await store.getFolderPermission(source, { request: true });
+        setFolderSourceStatus(sourceId, status);
+        if (status !== "granted") {
+            handleUnavailableTrack({ title: source.name, sourceId, unavailableReason: status });
+            return null;
+        }
+    }
+    announceImport(`Rescanning “${source.name}”…`);
+    let entries = [];
+    try {
+        entries = await lib.collectFilesFromDirectoryHandle(source.handle);
+    } catch (err) {
+        const message = `Couldn't read “${source.name}”. It may have been moved or renamed.`;
+        showLibraryToast(message, { error: true, timeoutMs: 0 });
+        announceImport(message);
+        return null;
+    }
+    const existing = getFolderSourceTracks(sourceId);
+    const diff = lib.diffFolderScan(existing, entries);
+    if (diff.removed.length) {
+        const ids = diff.removed.map((t) => t.id);
+        if (typeof store.forgetLinkedTrackUrls === "function") store.forgetLinkedTrackUrls(ids);
+        // Playlists and likes keep the ids, so a moved file that comes back with the same id reappears in them
+        for (const id of ids) await store.deleteImportedTrack(id);
+        removeTracksFromCatalog(ids);
+    }
+    const summarize = () => lib.summarizeRescan(source.name, diff);
+    if (diff.added.length) {
+        await importLocalAudioFiles(diff.added, {
+            sourceName: source.name,
+            linkSource: source,
+            openCollection: options.openCollection === true,
+            summarize,
+        });
+    } else {
+        flushImportUpdates({ force: true });
+        refreshLibraryViews();
+        const message = summarize();
+        showLibraryToast(message);
+        if (options.openCollection) openLocalFilesDetail();
+    }
+    refreshFolderSourcesUi();
+    focusFolderSourceControl(sourceId, "rescan", options.returnFocus);
+    return diff;
+}
+
+/** Removes a linked folder and its songs from the library (files on disk are untouched). */
+async function forgetFolderSource(sourceId) {
+    const store = getStorage();
+    const source = folderSources.find((src) => src.id === sourceId);
+    if (!store || !source) return false;
+    const ids = getFolderSourceTracks(sourceId).map((t) => t.id);
+    if (typeof store.forgetLinkedTrackUrls === "function") store.forgetLinkedTrackUrls(ids);
+    for (const id of ids) await store.deleteImportedTrack(id);
+    const idSet = new Set(ids);
+    for (const pl of getUserPlaylists()) {
+        for (const id of pl.trackIds) if (idSet.has(id)) store.removeTrackFromPlaylist(pl.id, id);
+    }
+    removeTracksFromCatalog(ids);
+    await store.deleteFolderSource(sourceId);
+    folderSources = folderSources.filter((src) => src.id !== sourceId);
+    folderSourceStatus.delete(sourceId);
+    flushImportUpdates({ force: true });
+    refreshLibraryViews();
+    refreshFolderSourcesUi();
+    const message = `Removed “${source.name}” from your library. The files on your computer weren't touched.`;
+    showLibraryToast(message);
+    announceImport(message);
+    const heading = document.getElementById("local-sources-title");
+    if (heading && typeof heading.focus === "function") heading.focus();
+    return true;
+}
+
+/** Describes each source for the Local Files panel and the Add Music menu. */
+function buildFolderSourceSummaries() {
+    const summaries = folderSources.map((src) => {
+        const status = getFolderSourceStatus(src.id);
+        const count = getFolderSourceTracks(src.id).length;
+        return {
+            id: src.id,
+            kind: "linked",
+            name: src.name,
+            count,
+            status,
+            modeLabel: "Linked folder · plays from your disk, nothing copied",
+            statusLabel:
+                status === "granted"
+                    ? "Connected"
+                    : status === "denied"
+                      ? "Access blocked by the browser"
+                      : status === "missing"
+                        ? "Folder no longer available"
+                        : "Needs permission after reload",
+        };
+    });
+    const copied = getImportedLocalTracks().filter((t) => t.storageMode !== "linked");
+    if (copied.length) {
+        summaries.push({
+            id: "copied",
+            kind: "copy",
+            name: "Added files",
+            count: copied.length,
+            status: "granted",
+            modeLabel: "Copied into this browser's storage",
+            statusLabel: "",
+        });
+    }
+    return summaries;
+}
+
+function refreshFolderSourcesUi() {
+    renderLocalSourcesPanel();
+    renderFolderSourceMenuItems();
+    updateLocalFilesCount();
+}
+
+function renderLocalSourcesPanel() {
+    const panel = document.getElementById("local-sources");
+    const list = document.getElementById("local-sources-list");
+    if (!panel || !list) return;
+    const onLocal = activeView === "detail" && activeDetail && activeDetail.type === "local";
+    const summaries = buildFolderSourceSummaries();
+    panel.hidden = !onLocal || summaries.length === 0;
+    if (panel.hidden) return;
+    list.innerHTML = summaries
+        .map((s) => {
+            const name = escapeHtml(s.name);
+            const songsLabel = `${s.count} ${s.count === 1 ? "song" : "songs"}`;
+            let actions = "";
+            if (s.kind === "linked") {
+                const primary =
+                    s.status === "granted"
+                        ? `<button type="button" class="detail-row-btn" data-source-action="rescan" data-source-id="${escapeHtml(s.id)}" aria-label="Rescan ${name} for added or removed songs">Rescan</button>`
+                        : s.status === "missing"
+                          ? ""
+                          : `<button type="button" class="detail-row-btn local-source-reconnect" data-source-action="reconnect" data-source-id="${escapeHtml(s.id)}" aria-label="Reconnect folder ${name}">Reconnect folder</button>`;
+                actions = `${primary}<button type="button" class="detail-row-btn danger-btn" data-source-action="forget" data-source-id="${escapeHtml(s.id)}" aria-label="Remove ${name} from your library">Remove</button>`;
+            }
+            const statusHtml = s.statusLabel
+                ? `<span class="local-source-status is-${escapeHtml(s.status)}">${escapeHtml(s.statusLabel)}</span>`
+                : "";
+            return `<li class="local-source" data-source-id="${escapeHtml(s.id)}" data-source-kind="${s.kind}">
+                <span class="local-source-icon" aria-hidden="true">${s.kind === "linked" ? "📁" : "💾"}</span>
+                <div class="local-source-text">
+                    <span class="local-source-name">${name}</span>
+                    <span class="local-source-meta">${escapeHtml(s.modeLabel)} · ${songsLabel}</span>
+                    ${statusHtml}
+                </div>
+                <div class="local-source-actions">${actions}</div>
+            </li>`;
+        })
+        .join("");
+}
+
+function focusFolderSourceControl(sourceId, action, fallback) {
+    const list = document.getElementById("local-sources-list");
+    let target = null;
+    if (list && typeof list.querySelector === "function") {
+        try {
+            target = list.querySelector(`[data-source-id="${sourceId}"][data-source-action="${action}"]`);
+        } catch (_) {
+            target = null;
+        }
+    }
+    if (target && typeof target.focus === "function" && target.dataset && target.dataset.sourceAction === action) {
+        target.focus();
+        return target;
+    }
+    if (fallback && fallback.isConnected !== false && typeof fallback.focus === "function") {
+        fallback.focus();
+        return fallback;
+    }
+    return null;
+}
+
+function handleSourceAction(action, sourceId, button) {
+    if (action === "reconnect") return reconnectFolderSource(sourceId, { returnFocus: button });
+    if (action === "rescan") return rescanFolderSource(sourceId, { returnFocus: button });
+    if (action === "forget") {
+        // Two-step confirm without a blocking window.confirm()
+        if (button && button.dataset && button.dataset.confirming === "true") {
+            return forgetFolderSource(sourceId);
+        }
+        if (button && button.dataset) {
+            button.dataset.confirming = "true";
+            button.textContent = "Click again to remove";
+            const source = folderSources.find((src) => src.id === sourceId);
+            announceImport(`Press again to remove “${source ? source.name : "this folder"}” and its songs from your library.`);
+            if (typeof setTimeout === "function") {
+                clearTimeout(forgetConfirmTimers.get(sourceId));
+                forgetConfirmTimers.set(
+                    sourceId,
+                    setTimeout(() => {
+                        button.dataset.confirming = "false";
+                        button.textContent = "Remove";
+                    }, 4000)
+                );
+            }
+        }
+        return null;
+    }
+    return null;
+}
+
+/** "Reconnect “X”" / "Rescan “X”" items in the shared Add Music menu, one per linked folder. */
+function renderFolderSourceMenuItems() {
+    const group = document.getElementById("add-music-source-items");
+    if (!group) return;
+    const linked = buildFolderSourceSummaries().filter((s) => s.kind === "linked" && s.status !== "missing");
+    group.hidden = linked.length === 0;
+    group.innerHTML = linked
+        .map((s) => {
+            const action = s.status === "granted" ? "rescan" : "reconnect";
+            const label = action === "rescan" ? `Rescan “${escapeHtml(s.name)}”` : `Reconnect “${escapeHtml(s.name)}”`;
+            const icon =
+                action === "rescan"
+                    ? '<path d="M17.65 6.35A7.96 7.96 0 0 0 12 4a8 8 0 1 0 7.73 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>'
+                    : '<path d="M3.9 12a3.1 3.1 0 0 1 3.1-3.1h4V7H7a5 5 0 0 0 0 10h4v-1.9H7A3.1 3.1 0 0 1 3.9 12zM8 13h8v-2H8v2zm9-6h-4v1.9h4a3.1 3.1 0 0 1 0 6.2h-4V17h4a5 5 0 0 0 0-10z"/>';
+            return `<button type="button" class="add-music-item" role="menuitem" tabindex="-1" data-add-music="source-${action}" data-source-id="${escapeHtml(s.id)}"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">${icon}</svg><span>${label}</span></button>`;
+        })
+        .join("");
+}
+
+function initFolderSourceControls() {
+    const list = document.getElementById("local-sources-list");
+    if (list) {
+        list.addEventListener("click", (e) => {
+            const btn = e.target && typeof e.target.closest === "function" ? e.target.closest("[data-source-action]") : null;
+            if (!btn || !btn.dataset) return;
+            handleSourceAction(btn.dataset.sourceAction, btn.dataset.sourceId, btn);
+        });
+    }
+    const group = document.getElementById("add-music-source-items");
+    if (group) {
+        group.addEventListener("click", (e) => {
+            const item = e.target && typeof e.target.closest === "function" ? e.target.closest("[data-add-music]") : null;
+            if (!item || !item.dataset) return;
+            const anchor = addMusicMenuState.anchor;
+            closeAddMusicMenu({ returnFocus: true });
+            const id = item.dataset.sourceId;
+            if (item.dataset.addMusic === "source-reconnect") reconnectFolderSource(id, { returnFocus: anchor });
+            else if (item.dataset.addMusic === "source-rescan") rescanFolderSource(id, { returnFocus: anchor });
+        });
+    }
+}
+
 window.SpotTubeShell = {
+    initFolderSources,
+    importFromFolderHandle,
+    reconnectFolderSource,
+    rescanFolderSource,
+    forgetFolderSource,
+    resolveTrackAudioUrl,
+    handleUnavailableTrack,
+    getQueueCatalog,
+    getFolderSources: () => folderSources.slice(),
+    getFolderSourceStatus,
+    buildFolderSourceSummaries,
+    renderLocalSourcesPanel,
+    handleSourceAction,
     canPickFolders,
     renderInChunks,
     useDisplayCover,
@@ -8495,7 +8997,7 @@ window.SpotTubeShell = {
         const qm = getQueueManager();
         if (qm && songs.length > 0) {
             if (Array.isArray(patch.songs)) {
-                qm.setCatalog(songs, { rebuildQueue: false, silent: true });
+                qm.setCatalog(getQueueCatalog(), { rebuildQueue: false, silent: true });
             }
             if (typeof patch.activeMoodFilter === "string") {
                 qm.setMoodFilter(activeMoodFilter, { retune: false, silent: true });
@@ -8504,7 +9006,7 @@ window.SpotTubeShell = {
                 const track = songs[currentTrackIndex] || songs[0];
                 if (track) {
                     qm.setCurrentTrack(track, {
-                        catalog: songs,
+                        catalog: getQueueCatalog(),
                         regenerateMix: true,
                         recordHistory: false,
                         silent: true,

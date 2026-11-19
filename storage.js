@@ -14,7 +14,7 @@
 })(typeof globalThis !== "undefined" ? globalThis : typeof window !== "undefined" ? window : this, function (globalScope) {
     const STORAGE_KEY = "spottube_hybrid_store_v1";
     const IDB_NAME = "SpotTubeHybridDB";
-    const IDB_VERSION = 1;
+    const IDB_VERSION = 2; // v2 (item 14): folderSources store for no-copy linked folders
     const MAX_RECENT_HISTORY = 100;
     const MAX_TRACK_PLAY_TIMESTAMPS = 25;
 
@@ -195,9 +195,11 @@
             audioBlobs: new Map(),
             importedTracks: new Map(),
             analyzerCache: new Map(),
+            folderSources: new Map(),
         };
 
         const objectUrlCache = new Map();
+        const linkedUrlCache = new Map(); // trackId -> { url, file } for no-copy linked tracks (this page only)
         const listeners = new Set();
         let activeSession = null;
         let state = loadState();
@@ -286,6 +288,8 @@
             memoryIdb.audioBlobs.clear();
             memoryIdb.importedTracks.clear();
             memoryIdb.analyzerCache.clear();
+            memoryIdb.folderSources.clear();
+            linkedUrlCache.clear();
             try {
                 kvAdapter.removeItem(storageKey);
             } catch (_) {}
@@ -733,9 +737,18 @@
                         if (!db.objectStoreNames.contains("analyzerCache")) {
                             db.createObjectStore("analyzerCache", { keyPath: "trackId" });
                         }
+                        if (!db.objectStoreNames.contains("folderSources")) {
+                            db.createObjectStore("folderSources", { keyPath: "id" });
+                        }
                     };
-                    req.onsuccess = () => resolve(req.result);
+                    req.onsuccess = () => {
+                        const db = req.result;
+                        // Let a newer tab upgrade the schema instead of blocking it
+                        if (db) db.onversionchange = () => db.close();
+                        resolve(db);
+                    };
                     req.onerror = () => resolve(null);
+                    req.onblocked = () => resolve(null);
                 } catch (_) {
                     resolve(null);
                 }
@@ -879,8 +892,9 @@
                 trackMeta.size ||
                 0;
 
-            let audioUrl = trackMeta.audioUrl || "";
-            if (audioBlobOrBuffer) {
+            const isLinked = trackMeta.storageMode === "linked" && trackMeta.sourceId;
+            let audioUrl = isLinked ? "" : trackMeta.audioUrl || "";
+            if (audioBlobOrBuffer && !isLinked) {
                 await idbPut("audioBlobs", {
                     id,
                     blob: audioBlobOrBuffer,
@@ -906,7 +920,8 @@
                 durationFormatted: trackMeta.durationFormatted || "0:00",
                 bitrateKbps: Number(trackMeta.bitrateKbps) || 320,
                 sampleRate: Number(trackMeta.sampleRate) || 44100,
-                audioUrl: audioUrl || `blob:spottube-local/${encodeURIComponent(id)}`,
+                // Linked tracks never persist a URL: blob: URLs die with the page, so they are resolved at play time
+                audioUrl: isLinked ? "" : audioUrl || `blob:spottube-local/${encodeURIComponent(id)}`,
                 coverUrl: trackMeta.coverUrl || "Images/Espresso.jpeg",
                 genre: trackMeta.genre || "Local",
                 subgenres: Array.isArray(trackMeta.subgenres) ? trackMeta.subgenres : ["Imported"],
@@ -927,6 +942,11 @@
                 mimeType,
                 size,
                 hasEmbeddedCover: Boolean(trackMeta.hasEmbeddedCover),
+                storageMode: isLinked ? "linked" : "copy",
+                sourceId: isLinked ? String(trackMeta.sourceId) : undefined,
+                relativePath: isLinked ? String(trackMeta.relativePath || trackMeta.filename || "") : undefined,
+                importKey: trackMeta.importKey || undefined,
+                lastModified: Number(trackMeta.lastModified) || undefined,
                 isLocalImport: true,
                 createdAt: trackMeta.createdAt || now,
                 updatedAt: now,
@@ -947,6 +967,11 @@
             const hydrated = [];
             for (const track of tracks) {
                 let audioUrl = track.audioUrl;
+                if (track.storageMode === "linked") {
+                    // No copy: the URL comes from the folder handle at play time (resolveLinkedTrackUrl)
+                    hydrated.push({ ...track, audioUrl: objectUrlCache.get(track.id) || "" });
+                    continue;
+                }
                 if (!objectUrlCache.has(track.id)) {
                     const blobRec = await idbGet("audioBlobs", track.id);
                     if (blobRec && blobRec.blob) {
@@ -977,8 +1002,166 @@
             }
             await idbDelete("importedTracks", id);
             await idbDelete("audioBlobs", id);
+            forgetLinkedTrackUrls([id]);
             emitChange("idb:track-deleted", { trackId: id });
             return true;
+        }
+
+        // ==================== ITEM 14: NO-COPY LINKED FOLDERS ====================
+        // A folder picked with showDirectoryPicker() is stored as its FileSystemDirectoryHandle (IndexedDB can
+        // structured-clone it). Its tracks keep only metadata + a relative path; the audio is read from the
+        // folder at play time, so nothing is copied into the browser.
+
+        function folderSourceIdFor(name) {
+            const slug = String(name || "folder")
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, "-")
+                .replace(/^-+|-+$/g, "")
+                .slice(0, 40);
+            return `folder-${slug || "folder"}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+        }
+
+        async function saveFolderSource(fields = {}) {
+            const now = Date.now();
+            const existing = fields.id ? await idbGet("folderSources", fields.id) : null;
+            const record = {
+                ...(existing || {}),
+                ...fields,
+                id: fields.id || folderSourceIdFor(fields.name || (fields.handle && fields.handle.name)),
+                name: String(fields.name || (fields.handle && fields.handle.name) || (existing && existing.name) || "Folder"),
+                createdAt: (existing && existing.createdAt) || fields.createdAt || now,
+                updatedAt: now,
+            };
+            await idbPut("folderSources", record);
+            emitChange("idb:folder-source-saved", { sourceId: record.id });
+            return record;
+        }
+
+        async function getFolderSources() {
+            const rows = await idbGetAll("folderSources");
+            return rows.slice().sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+        }
+
+        async function getFolderSource(sourceId) {
+            if (!sourceId) return null;
+            return idbGet("folderSources", sourceId);
+        }
+
+        async function deleteFolderSource(sourceId) {
+            if (!sourceId) return false;
+            await idbDelete("folderSources", sourceId);
+            emitChange("idb:folder-source-deleted", { sourceId: String(sourceId) });
+            return true;
+        }
+
+        /** The saved source for the same folder (FileSystemHandle.isSameEntry), so re-picking a folder reuses it. */
+        async function findFolderSourceForHandle(handle) {
+            if (!handle) return null;
+            for (const source of await getFolderSources()) {
+                if (!source.handle) continue;
+                if (source.handle === handle) return source;
+                if (typeof source.handle.isSameEntry === "function") {
+                    try {
+                        if (await source.handle.isSameEntry(handle)) return source;
+                    } catch (_) {}
+                }
+            }
+            return null;
+        }
+
+        /**
+         * "granted" | "prompt" | "denied" | "missing". With { request: true } it asks the user
+         * (handle.requestPermission needs a user gesture; without one the browser throws and we report "prompt").
+         */
+        async function getFolderPermission(sourceOrId, opts = {}) {
+            const source = typeof sourceOrId === "string" ? await getFolderSource(sourceOrId) : sourceOrId;
+            const handle = source && source.handle;
+            if (!handle) return "missing";
+            const descriptor = { mode: "read" };
+            let state = "granted"; // handles without the permission API (older engines, tests) are always readable
+            if (typeof handle.queryPermission === "function") {
+                try {
+                    state = await handle.queryPermission(descriptor);
+                } catch (_) {
+                    state = "prompt";
+                }
+            }
+            if (state !== "granted" && opts.request && typeof handle.requestPermission === "function") {
+                try {
+                    state = await handle.requestPermission(descriptor);
+                } catch (_) {
+                    state = "prompt";
+                }
+            }
+            return state === "granted" || state === "denied" ? state : "prompt";
+        }
+
+        /** Walks "Root/sub/file.mp3" from the root folder handle to a File. Throws NotFoundError when it is gone. */
+        async function getFileFromFolder(handle, relativePath) {
+            const parts = String(relativePath || "").split("/").filter(Boolean);
+            if (parts.length > 1 && parts[0] === handle.name) parts.shift();
+            if (!parts.length) {
+                const err = new Error("Empty path");
+                err.name = "NotFoundError";
+                throw err;
+            }
+            let dir = handle;
+            for (const segment of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(segment);
+            const fileHandle = await dir.getFileHandle(parts[parts.length - 1]);
+            return fileHandle.getFile();
+        }
+
+        /**
+         * Resolves a playable blob: URL for a linked track on demand.
+         * → { url, status } with status "ok" | "prompt" | "denied" | "missing" (folder forgotten) | "not-found" (file moved/deleted)
+         */
+        async function resolveLinkedTrackUrl(track, opts = {}) {
+            if (!track || track.storageMode !== "linked") {
+                return { url: (track && track.audioUrl) || null, status: track && track.audioUrl ? "ok" : "missing" };
+            }
+            const cached = linkedUrlCache.get(track.id);
+            if (cached && cached.url) return { url: cached.url, status: "ok" };
+            const source = await getFolderSource(track.sourceId);
+            if (!source || !source.handle) return { url: null, status: "missing" };
+            const permission = await getFolderPermission(source, { request: Boolean(opts.request) });
+            if (permission !== "granted") return { url: null, status: permission };
+            let file;
+            try {
+                file = await getFileFromFolder(source.handle, track.relativePath);
+            } catch (err) {
+                const name = err && err.name;
+                if (name === "NotAllowedError" || name === "SecurityError") return { url: null, status: "prompt" };
+                return { url: null, status: "not-found" };
+            }
+            const URLApi = (globalScope && globalScope.URL) || (typeof URL !== "undefined" ? URL : null);
+            let url = null;
+            try {
+                url = URLApi && typeof URLApi.createObjectURL === "function" ? URLApi.createObjectURL(file) : null;
+            } catch (_) {}
+            if (!url) url = `blob:spottube-local/${encodeURIComponent(track.id)}`;
+            linkedUrlCache.set(track.id, { url, file });
+            return { url, status: "ok" };
+        }
+
+        /** Remembers a session URL (e.g. the one made at import time) so it is reused instead of re-resolving. */
+        function setLinkedTrackUrl(trackId, url) {
+            if (!trackId || !url) return;
+            linkedUrlCache.set(String(trackId), { url, file: null });
+        }
+
+        /** Drops cached URLs for a source's tracks (after Rescan or Forget) so the next play re-reads the folder. */
+        function forgetLinkedTrackUrls(trackIds = []) {
+            const URLApi = (globalScope && globalScope.URL) || (typeof URL !== "undefined" ? URL : null);
+            for (const id of trackIds) {
+                const entry = linkedUrlCache.get(String(id));
+                if (!entry) continue;
+                if (entry.file && URLApi && typeof URLApi.revokeObjectURL === "function") {
+                    try {
+                        URLApi.revokeObjectURL(entry.url);
+                    } catch (_) {}
+                }
+                linkedUrlCache.delete(String(id));
+            }
         }
 
         // ==================== WEB AUDIO API REAL-TIME ANALYZER CACHE ====================
@@ -1271,6 +1454,17 @@
             getAudioBlob,
             getImportedTracks,
             deleteImportedTrack,
+            // No-copy linked folders (item 14)
+            saveFolderSource,
+            getFolderSources,
+            getFolderSource,
+            deleteFolderSource,
+            findFolderSourceForHandle,
+            getFolderPermission,
+            getFileFromFolder,
+            resolveLinkedTrackUrl,
+            setLinkedTrackUrl,
+            forgetLinkedTrackUrls,
             // Real-Time Web Audio API Analyzer Cache
             updateTrackAnalyzerFeatures,
             getTrackAnalyzerFeatures,

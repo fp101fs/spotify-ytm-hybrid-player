@@ -4289,3 +4289,135 @@ span.detail-track-cover.import-shimmer {
 .chunk-sentinel {
     block-size: 1px;
 }
+
+/* ==================== Item 14: linked folders (no copy) ==================== */
+
+.local-sources {
+    margin-block-start: 16px;
+    inline-size: min(100%, 640px);
+}
+
+.local-sources[hidden],
+.add-music-source-items[hidden] {
+    display: none;
+}
+
+.local-sources-title {
+    margin: 0 0 8px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+}
+
+.local-sources-title:focus-visible {
+    outline: 2px solid #fff;
+    outline-offset: 2px;
+}
+
+.local-sources-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.local-source {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background-color: rgba(255, 255, 255, 0.04);
+}
+
+.local-source-icon {
+    font-size: 1.2rem;
+    flex-shrink: 0;
+}
+
+.local-source-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-inline-size: 0;
+    flex: 1 1 220px;
+}
+
+.local-source-name {
+    font-weight: 700;
+    color: var(--text-primary);
+    overflow-wrap: anywhere;
+}
+
+.local-source-meta {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+}
+
+.local-source-status {
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.local-source-status.is-granted {
+    color: #1ed760;
+}
+
+.local-source-status.is-prompt {
+    color: #f5c451;
+}
+
+.local-source-status.is-denied,
+.local-source-status.is-missing {
+    color: #ff8a8a;
+}
+
+.local-source-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.local-source-actions .detail-row-btn {
+    min-block-size: 32px;
+}
+
+.local-source-reconnect {
+    border-color: #f5c451;
+    color: #f5c451;
+}
+
+.add-music-source-items {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-block-start: 2px;
+    padding-block-start: 4px;
+    border-block-start: 1px solid var(--border-subtle);
+}
+
+.add-music-source-items .add-music-item span {
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 740px) {
+    .local-source {
+        flex-wrap: wrap;
+    }
+
+    .local-source-actions {
+        inline-size: 100%;
+    }
+
+    .local-source-actions .detail-row-btn {
+        min-block-size: 44px;
+        flex: 1 1 auto;
+    }
+}
