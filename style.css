@@ -527,9 +527,10 @@ input {
     inset-block-start: 0;
     z-index: 20;
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    justify-content: space-between;
-    gap: 12px;
+    justify-content: flex-start;
+    gap: 8px 12px;
     padding: 10px 18px;
     background-color: var(--bg-glass);
     backdrop-filter: blur(16px);
@@ -655,7 +656,8 @@ input {
     display: flex;
     align-items: center;
     gap: 8px;
-    flex-shrink: 0;
+    flex: 1 0 100%; /* always its own row under back/forward + search */
+    min-inline-size: 0;
 }
 
 .sign,
@@ -704,7 +706,7 @@ input {
 /* YT Music Mood / Activity Filter Chips Bar */
 .mood-chips-bar {
     position: sticky;
-    inset-block-start: 57px;
+    inset-block-start: var(--navbar-height, 104px);
     z-index: 15;
     display: flex;
     align-items: center;
@@ -2515,6 +2517,7 @@ hr {
     flex-direction: column;
     gap: 2px;
     min-inline-size: 0;
+    flex: 1 1 auto;
 }
 
 .mix-badge {
@@ -2585,11 +2588,12 @@ hr {
 }
 
 .mix-tuning-caption {
+    min-inline-size: 0;
     font-size: 0.72rem;
     font-weight: 600;
     color: var(--text-secondary);
     white-space: nowrap;
-    overflow: clip;
+    overflow: hidden;
     text-overflow: ellipsis;
 }
 
@@ -2628,8 +2632,10 @@ hr {
 
 .drawer-section-header {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
+    gap: 4px 8px;
     font-size: 0.78rem;
     font-weight: 700;
     color: var(--text-secondary);
@@ -2779,8 +2785,9 @@ hr {
     display: flex;
     flex-direction: column;
     min-inline-size: 0;
-    flex: 1 1 auto;
+    flex: 1 1 0;
     gap: 2px;
+    overflow: hidden;
 }
 
 .queue-item-title-row {
@@ -2790,13 +2797,20 @@ hr {
     min-inline-size: 0;
 }
 
+/* Up to two lines, then an ellipsis; never wider than the row */
 .queue-item-title {
+    flex: 0 1 auto;
+    min-inline-size: 0;
     font-size: 0.84rem;
     font-weight: 600;
+    line-height: 1.25;
     color: var(--text-primary);
-    white-space: nowrap;
-    overflow: clip;
-    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+    overflow-wrap: break-word;
+    word-break: break-word;
 }
 
 .queue-source-pill {
@@ -2817,24 +2831,131 @@ hr {
 }
 
 .queue-item-artist {
+    min-inline-size: 0;
     font-size: 0.73rem;
+    line-height: 1.3;
     color: var(--text-secondary);
     white-space: nowrap;
-    overflow: clip;
+    overflow: hidden;
     text-overflow: ellipsis;
 }
 
 .queue-item-right {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 2px;
     flex-shrink: 0;
 }
 
+/* Actions take their own space (never drawn over the text). Mouse: shown on hover/focus in place of
+   the duration. Touch: behind the ⋯ button, opening as a labelled row under the title. */
 .queue-item-actions {
-    display: flex;
+    display: none;
     align-items: center;
     gap: 2px;
+    flex-shrink: 0;
+}
+
+.queue-action-label {
+    display: none;
+}
+
+.queue-more-btn {
+    display: none;
+    inline-size: 32px;
+    block-size: 32px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0;
+    flex-shrink: 0;
+}
+
+.queue-more-btn svg {
+    inline-size: 16px;
+    block-size: 16px;
+}
+
+.queue-more-btn:is(:hover, :focus-visible),
+.queue-more-btn[aria-expanded="true"] {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: var(--text-primary);
+}
+
+/* Mouse: hovering a row swaps its duration for ✕ (remove) and ⋯ (all actions) — about the same width */
+@media (hover: hover) and (pointer: fine) {
+    .queue-item:is(:hover, :focus-within):not(.actions-open) .queue-item-actions {
+        display: flex;
+    }
+
+    .queue-item:is(:hover, :focus-within):not(.actions-open) .queue-action-btn:not(.remove-btn) {
+        display: none;
+    }
+
+    .queue-item:is(:hover, :focus-within) .queue-item-duration {
+        display: none;
+    }
+
+    .queue-item:is(:hover, :focus-within) .queue-more-btn {
+        display: inline-flex;
+        inline-size: 26px;
+        block-size: 26px;
+    }
+}
+
+/* Touch: ⋯ is always there (the duration stays too) */
+@media (hover: none), (pointer: coarse) {
+    .queue-more-btn {
+        display: inline-flex;
+    }
+}
+
+/* ⋯ opens every action as a labelled row under the title */
+.queue-item {
+    flex-wrap: wrap;
+    row-gap: 8px;
+}
+
+.queue-item.actions-open .queue-more-btn {
+    display: inline-flex;
+}
+
+.queue-item.actions-open .queue-item-duration {
+    display: none;
+}
+
+.queue-item.actions-open .queue-item-actions {
+    display: flex;
+    order: 10;
+    flex: 1 0 100%;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.queue-item.actions-open .queue-action-btn {
+    inline-size: auto;
+    block-size: 32px;
+    padding: 0 10px;
+    gap: 6px;
+    background-color: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-pill);
+    font-size: 0.76rem;
+    font-weight: 600;
+}
+
+.queue-item.actions-open .queue-action-label {
+    display: inline;
+}
+
+@media (pointer: coarse) {
+    .queue-item.actions-open .queue-action-btn {
+        block-size: 40px;
+    }
 }
 
 .queue-action-btn {
@@ -3127,9 +3248,10 @@ hr {
 
 .song-info {
     display: flex;
+    flex: 0 1 auto;
     flex-direction: column;
     justify-content: center;
-    min-inline-size: 0;
+    min-inline-size: 48px;
     gap: 2px;
 }
 
@@ -3578,9 +3700,45 @@ hr {
         grid-column: 1 / -1;
     }
 
+    /* Track info and the right-hand buttons share row 1; controls + progress are row 2 */
+    .left-section {
+        grid-column: 1;
+        grid-row: 1;
+        min-inline-size: 0;
+    }
+
+    .right-section {
+        grid-column: 2;
+        grid-row: 1;
+        gap: 6px;
+    }
+
     .crossfade-pill,
-    .volume-bar {
+    .volume-bar,
+    .right-section .mute {
         display: none;
+    }
+}
+
+/* Narrow phones: the playbar's first row keeps cover, title/artist, like, the visualizer switch and queue */
+@media screen and (max-width: 480px) {
+    .left-section {
+        gap: 8px;
+    }
+
+    .album-cover {
+        inline-size: 44px;
+        block-size: 44px;
+    }
+
+    .playbar-meta-row,
+    .playbar-add-playlist-btn,
+    .playbar-mix-btn {
+        display: none;
+    }
+
+    .playbar-track-actions {
+        margin-inline-start: 0;
     }
 }
 
@@ -4937,22 +5095,75 @@ span.detail-track-cover.import-shimmer {
     border-color: var(--accent-spotify);
 }
 
-/* Video panel: sits above the main view, the sound stays in the playbar */
+/* Visualizer stage: sits above the main view. Shows the visualizer, or the video (sound stays in the playbar) */
 .yt-video-panel {
     flex-shrink: 0;
     /* below the sticky navbar + mood chips when scrolled into view */
-    scroll-margin-block-start: 124px;
-    margin: 0 16px 12px;
-    padding: 12px;
-    border-radius: var(--radius-lg);
-    background-color: var(--bg-elevated);
-    border: 1px solid var(--border-subtle);
+    scroll-margin-block-start: calc(var(--navbar-height, 104px) + 60px);
+    margin: 12px 16px;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 8px;
 }
 
+.yt-video-panel.is-pip-away {
+    display: none;
+}
+
+.media-stage-frame {
+    position: relative;
+    inline-size: 100%;
+    aspect-ratio: 16 / 9;
+    max-block-size: min(46vh, 520px);
+    background-color: #05050f;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    touch-action: manipulation;
+    -webkit-user-select: none;
+    user-select: none;
+    isolation: isolate;
+}
+
+.viz-canvas,
+.yt-video-frame {
+    position: absolute;
+    inset: 0;
+    inline-size: 100%;
+    block-size: 100%;
+    display: block;
+}
+
+.viz-canvas[hidden] {
+    display: none;
+}
+
+.yt-video-frame {
+    background-color: #000;
+}
+
+.media-stage-frame[data-mode="visualizer"] .video-only,
+.media-stage-frame[data-mode="video"] .viz-only {
+    display: none !important;
+}
+
+.yt-video {
+    position: absolute;
+    inset: 0;
+    inline-size: 100%;
+    block-size: 100%;
+    border: 0;
+    object-fit: contain;
+    background-color: #000;
+}
+
+/* Title + license under the video; nothing extra under the visualizer */
 .yt-video-head {
+    display: none;
+    padding-inline: 4px;
+}
+
+.yt-video-panel[data-stage-mode="video"] .yt-video-head {
     display: flex;
     flex-wrap: wrap;
     align-items: flex-start;
@@ -4980,79 +5191,366 @@ span.detail-track-cover.import-shimmer {
 .yt-video-license,
 .yt-video-note {
     margin: 2px 0 0;
+    padding-inline: 4px;
     font-size: 0.8rem;
     line-height: 1.45;
     color: var(--text-secondary);
 }
 
-.yt-video-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
+.yt-video-note:empty {
+    display: none;
 }
 
-.yt-video-frame {
-    position: relative;
-    inline-size: 100%;
-    max-inline-size: 960px;
-    aspect-ratio: 16 / 9;
-    max-block-size: 48vh;
-    margin-inline: auto;
-    background-color: #000;
-    border-radius: var(--radius-md);
-    overflow: hidden;
-}
-
-.yt-video {
+/* Overlay controls: fade in on hover / tap / keyboard focus, fade out after a few seconds */
+.stage-controls {
     position: absolute;
     inset: 0;
-    inline-size: 100%;
-    block-size: 100%;
-    border: 0;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s ease;
 }
 
-.yt-video {
-    object-fit: contain;
-    background-color: #000;
+.media-stage-frame.controls-visible .stage-controls {
+    opacity: 1;
 }
 
-.yt-video-frame:fullscreen {
-    max-inline-size: none;
+.media-stage-frame.controls-visible .stage-controls :is(button, select, a) {
+    pointer-events: auto;
+}
+
+.stage-controls-top,
+.stage-controls-bottom {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px;
+}
+
+.stage-controls-top {
+    justify-content: flex-end;
+    background: linear-gradient(to bottom, rgba(0, 0, 0, 0.55), transparent);
+}
+
+.stage-controls-bottom {
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.65), transparent);
+}
+
+.stage-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    inline-size: 36px;
+    block-size: 36px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background-color: rgba(0, 0, 0, 0.5);
+    color: #fff;
+    cursor: pointer;
+    text-decoration: none;
+    transition: background-color 0.15s ease, transform 0.12s ease;
+}
+
+.stage-btn:hover {
+    background-color: rgba(255, 255, 255, 0.22);
+}
+
+.stage-btn svg {
+    inline-size: 18px;
+    block-size: 18px;
+}
+
+.stage-text-btn {
+    inline-size: auto;
+    padding: 0 12px;
+    border-radius: var(--radius-pill);
+    font-size: 0.78rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.stage-text-btn[aria-pressed="true"] {
+    background-color: var(--accent-spotify);
+    color: #000;
+}
+
+.stage-btn .stage-icon-on,
+.stage-btn.is-on .stage-icon-off,
+.stage-play-btn .stage-icon-pause,
+.stage-play-btn.is-playing .stage-icon-play {
+    display: none;
+}
+
+.stage-btn.is-on .stage-icon-on,
+.stage-play-btn.is-playing .stage-icon-pause {
+    display: block;
+}
+
+.stage-play-btn {
+    background-color: #fff;
+    color: #000;
+}
+
+.stage-play-btn:hover {
+    background-color: #fff;
+    transform: scale(1.06);
+}
+
+.stage-play-btn svg {
+    inline-size: 15px;
+    block-size: 15px;
+}
+
+.stage-look-select {
+    flex: 0 1 auto;
+    min-inline-size: 0;
+    max-inline-size: min(280px, 50%);
+    block-size: 36px;
+    padding: 0 10px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: var(--radius-pill);
+    background-color: rgba(0, 0, 0, 0.6);
+    color: #fff;
+    font: inherit;
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    cursor: pointer;
+}
+
+.stage-look-select option,
+.stage-look-select optgroup {
+    background-color: #181818;
+    color: #fff;
+}
+
+.stage-btn:focus-visible,
+.stage-look-select:focus-visible,
+.stage-switch:focus-visible {
+    outline: 2px solid #fff;
+    outline-offset: 2px;
+}
+
+/* "Tap again for the next look", look names, short notices */
+.stage-hint {
+    position: absolute;
+    inset-block-start: 50%;
+    inset-inline-start: 50%;
+    z-index: 3;
+    max-inline-size: calc(100% - 32px);
+    margin: 0;
+    padding: 8px 14px;
+    border-radius: var(--radius-pill);
+    background-color: rgba(0, 0, 0, 0.72);
+    color: #fff;
+    font-size: 0.85rem;
+    font-weight: 700;
+    text-align: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.96);
+    transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.stage-hint.is-visible {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+}
+
+/* Full screen (real, or a fixed overlay where the browser can't) */
+.media-stage-frame:fullscreen,
+.media-stage-frame.is-pseudo-fullscreen {
     max-block-size: none;
+    aspect-ratio: auto;
+    border: 0;
     border-radius: 0;
 }
 
-.playbar-video-btn {
+/* !important: beats the floating window's inline position and size */
+.media-stage-frame.is-pseudo-fullscreen {
+    position: fixed !important;
+    inset: 0 !important;
+    z-index: 2000;
+    inline-size: 100vw !important;
+    block-size: 100dvh !important;
+    cursor: auto;
+}
+
+.media-stage-frame.is-fullscreen:not(.controls-visible) {
+    cursor: none;
+}
+
+/* Floating window: moved to <body>, dragged anywhere, resized from the corner */
+.media-stage-frame.is-pip {
+    position: fixed;
+    z-index: 1100;
+    max-block-size: none;
+    aspect-ratio: auto;
+    border-color: var(--border-highlight);
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+    cursor: grab;
+    touch-action: none;
+}
+
+.media-stage-frame.is-pip:active {
+    cursor: grabbing;
+}
+
+.media-stage-frame.is-pip .stage-controls-top,
+.media-stage-frame.is-pip .stage-controls-bottom {
+    padding: 6px;
+    gap: 4px;
+}
+
+.media-stage-frame.is-pip .stage-btn {
+    inline-size: 30px;
+    block-size: 30px;
+}
+
+.media-stage-frame.is-pip .stage-text-btn {
+    inline-size: auto;
+}
+
+.media-stage-frame.is-pip .stage-look-select {
+    block-size: 30px;
+    max-inline-size: 45%;
+}
+
+.stage-resize {
+    display: none;
+}
+
+.media-stage-frame.is-pip .stage-resize {
+    position: absolute;
+    inset-block-end: 0;
+    inset-inline-end: 0;
+    z-index: 4;
+    display: block;
+    inline-size: 22px;
+    block-size: 22px;
+    cursor: nwse-resize;
+    touch-action: none;
+    background: linear-gradient(135deg, transparent 50%, rgba(255, 255, 255, 0.55) 50%, rgba(255, 255, 255, 0.55) 60%, transparent 60%, transparent 70%, rgba(255, 255, 255, 0.55) 70%, rgba(255, 255, 255, 0.55) 80%, transparent 80%);
+}
+
+/* Playbar: XFADE on top, the visualizer / video switch below it */
+.playbar-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.stage-switch {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    min-block-size: 32px;
-    padding: 0 10px;
+    gap: 5px;
+    padding: 2px 4px;
+    border: none;
     border-radius: var(--radius-pill);
-    border: 1px solid var(--border-highlight);
+    background: transparent;
     color: var(--text-secondary);
-    font-size: 0.75rem;
-    font-weight: 700;
+    cursor: pointer;
 }
 
-.playbar-video-btn svg {
-    inline-size: 16px;
+.stage-switch-icon {
+    inline-size: 14px;
+    block-size: 14px;
+    flex-shrink: 0;
+    transition: color 0.15s ease, opacity 0.15s ease;
+}
+
+.stage-switch-track {
+    position: relative;
+    display: inline-block;
+    inline-size: 30px;
     block-size: 16px;
+    border-radius: var(--radius-pill);
+    background-color: rgba(255, 255, 255, 0.22);
+    transition: background-color 0.15s ease;
 }
 
-.playbar-video-btn[aria-pressed="true"] {
+.stage-switch-thumb {
+    position: absolute;
+    inset-block-start: 2px;
+    inset-inline-start: 2px;
+    inline-size: 12px;
+    block-size: 12px;
+    border-radius: 50%;
+    background-color: #fff;
+    transition: transform 0.18s ease;
+}
+
+.stage-switch[aria-checked="false"] .stage-switch-note,
+.stage-switch[aria-checked="true"] .stage-switch-video {
     color: var(--accent-spotify);
-    border-color: var(--accent-spotify);
+}
+
+.stage-switch[aria-checked="true"] .stage-switch-track {
+    background-color: var(--accent-spotify);
+}
+
+.stage-switch[aria-checked="true"] .stage-switch-thumb {
+    transform: translateX(14px);
+}
+
+.stage-switch.no-video .stage-switch-video {
+    opacity: 0.35;
+}
+
+.stage-switch:hover .stage-switch-track {
+    background-color: rgba(255, 255, 255, 0.32);
+}
+
+.stage-switch[aria-checked="true"]:hover .stage-switch-track {
+    background-color: #3be477;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .stage-controls,
+    .stage-hint,
+    .stage-switch-thumb {
+        transition: none;
+    }
+}
+
+@media (pointer: coarse) {
+    .stage-btn {
+        inline-size: 44px;
+        block-size: 44px;
+    }
+
+    .stage-look-select {
+        block-size: 44px;
+    }
+
+    .media-stage-frame.is-pip .stage-btn {
+        inline-size: 36px;
+        block-size: 36px;
+    }
+
+    .media-stage-frame.is-pip .stage-resize {
+        inline-size: 30px;
+        block-size: 30px;
+    }
 }
 
 @media (max-width: 740px) {
     .yt-video-panel {
-        margin: 0 8px 8px;
-        padding: 8px;
+        margin: 8px;
     }
 
-    .yt-video-frame {
-        max-block-size: 40vh;
+    .media-stage-frame {
+        max-block-size: 34vh;
     }
 
     .yt-add-btn,
@@ -5063,14 +5561,44 @@ span.detail-track-cover.import-shimmer {
         min-block-size: 44px;
         min-inline-size: 44px;
     }
+}
 
-    .playbar-video-label {
-        position: absolute;
-        inline-size: 1px;
-        block-size: 1px;
-        overflow: hidden;
-        clip: rect(0 0 0 0);
-        white-space: nowrap;
+/* Phones: header row 2 (Start Mix / Settings / Up Next) goes icon-only */
+@media (max-width: 480px) {
+    .navbar {
+        padding: 8px 10px;
+    }
+
+    .rt .sign,
+    .rt .log {
+        inline-size: 44px;
+        block-size: 44px;
+        padding: 0;
+        justify-content: center;
+    }
+
+    .rt .sign span,
+    .rt .log span {
+        display: none;
+    }
+
+    .rt .sign svg,
+    .rt .log svg {
+        inline-size: 18px;
+        block-size: 18px;
+    }
+
+    .search-mix-pill span {
+        display: none;
+    }
+
+    .stage-controls-bottom {
+        gap: 4px;
+        padding: 6px;
+    }
+
+    .stage-look-select {
+        max-inline-size: 40%;
     }
 }
 

@@ -1975,6 +1975,15 @@
             };
         }
 
+        /**
+         * Audio tap for visualizers: the shared post-crossfade AnalyserNode and its AudioContext, or null
+         * until the Web Audio graph exists (it is built lazily on first play, and never on Safari/WebKit).
+         */
+        function getVisualizerTap() {
+            if (!webAudioSupported || !audioCtx || !analyserNode) return null;
+            return { audioContext: audioCtx, node: analyserNode };
+        }
+
         function onChange(listener) {
             if (typeof listener === "function") {
                 listeners.add(listener);
@@ -2024,6 +2033,7 @@
             handleKeyDown,
             bindKeyboardShortcuts,
             getState,
+            getVisualizerTap,
             onChange,
         };
     }

@@ -13,6 +13,7 @@
     <script src="player.js" defer></script>
     <script src="metadata-lookup.js" defer></script>
 <script src="youtube.js" defer></script>
+    <script src="visualizer.js" defer></script>
     <script src="script.js" defer></script>
 </head>
 <body>
@@ -204,14 +205,14 @@
                         <button type="button" class="mobile-add-music-btn" id="mobile-add-music-btn" aria-label="Add music" title="Add music" aria-haspopup="menu" aria-expanded="false" aria-controls="add-music-menu">
                             <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M15.25 8a.75.75 0 0 1-.75.75H8.75v5.75a.75.75 0 0 1-1.5 0V8.75H1.5a.75.75 0 0 1 0-1.5h5.75V1.5a.75.75 0 0 1 1.5 0v5.75h5.75a.75.75 0 0 1 .75.75z"></path></svg>
                         </button>
-                        <button type="button" class="sign start-mix-nav-btn" id="header-start-mix-btn" title="Start endless hybrid radio mix">
+                        <button type="button" class="sign start-mix-nav-btn" id="header-start-mix-btn" title="Start endless hybrid radio mix" aria-label="Start Mix">
                             <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 4a3 3 0 1 1 0 6 3 3 0 0 1 0-6z"/></svg>
                             <span>Start Mix</span>
                         </button>
                         <button type="button" class="settings-btn" id="settings-btn" aria-label="Settings" title="Settings" aria-haspopup="dialog" aria-controls="settings-dialog">
                             <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19.14 12.94a7.14 7.14 0 0 0 .05-.94 7.14 7.14 0 0 0-.05-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7 7 0 0 0-1.62-.94l-.36-2.54A.5.5 0 0 0 13.9 2.4h-3.84a.5.5 0 0 0-.5.42l-.36 2.54a7 7 0 0 0-1.62.94l-2.39-.96a.5.5 0 0 0-.6.22L2.67 8.88a.5.5 0 0 0 .12.64l2.03 1.58a7.4 7.4 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .6.22l2.39-.96c.5.38 1.04.7 1.62.94l.36 2.54a.5.5 0 0 0 .5.42h3.84a.5.5 0 0 0 .5-.42l.36-2.54a7 7 0 0 0 1.62-.94l2.39.96a.5.5 0 0 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.6a3.6 3.6 0 1 1 0-7.2 3.6 3.6 0 0 1 0 7.2z"/></svg>
                         </button>
-                        <button type="button" class="log drawer-toggle-btn" id="toggle-drawer-btn" aria-expanded="true" aria-controls="right-drawer" title="Toggle Up Next &amp; Track Info Drawer">
+                        <button type="button" class="log drawer-toggle-btn" id="toggle-drawer-btn" aria-label="Up Next" aria-expanded="true" aria-controls="right-drawer" title="Toggle Up Next &amp; Track Info Drawer">
                             <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1 3.75A.75.75 0 0 1 1.75 3h12.5a.75.75 0 0 1 0 1.5H1.75A.75.75 0 0 1 1 3.75zm0 4A.75.75 0 0 1 1.75 7h12.5a.75.75 0 0 1 0 1.5H1.75A.75.75 0 0 1 1 7.75zm0 4a.75.75 0 0 1 .75-.75h8.5a.75.75 0 0 1 0 1.5h-8.5a.75.75 0 0 1-.75-.75z"/></svg>
                             <span>Up Next</span>
                         </button>
@@ -234,23 +235,54 @@
                     <button type="button" class="mood-chip" data-mood="Soulful">Soulful</button>
                 </section>
 
-                <!-- Item 16: YouTube video panel (video follows the audio deck; the sound stays in the normal player) -->
-                <section class="yt-video-panel" id="yt-video-panel" aria-labelledby="yt-video-title" hidden>
+                <!-- Visualizer stage (visualizer.js). Plays a visualizer by default; Item 16: shows the YouTube video when the playbar switch is on the video side. The sound always stays in the player below. -->
+                <section class="yt-video-panel media-stage" id="yt-video-panel" data-stage-mode="visualizer" aria-label="Visualizer and music video" hidden>
+                    <div class="media-stage-frame" id="media-stage-frame" data-mode="visualizer">
+                        <canvas class="viz-canvas viz-only" id="viz-canvas" aria-hidden="true"></canvas>
+                        <canvas class="viz-canvas viz-only" id="viz-canvas-gl" aria-hidden="true" hidden></canvas>
+                        <div class="yt-video-frame video-only" id="yt-video-frame">
+                            <video class="yt-video" id="yt-video" muted playsinline preload="auto" disableremoteplayback aria-label="Music video, muted; the sound plays in the player below"></video>
+                        </div>
+                        <p class="stage-hint" id="stage-hint" role="status" aria-live="polite"></p>
+                        <div class="stage-controls" id="stage-controls" role="group" aria-label="Visualizer and video controls">
+                            <div class="stage-controls-top">
+                                <button type="button" class="stage-btn" id="stage-pip-btn" aria-label="Pop out into a floating window" title="Pop out into a floating window">
+                                    <svg class="stage-icon-off" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19 11h-8v6h8v-6zm4 8V5a2 2 0 0 0-2-2H3a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h18a2 2 0 0 0 2-2zm-2 .02H3V4.97h18v14.05z"/></svg>
+                                    <svg class="stage-icon-on" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M21 3H3a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h18a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 16H3V5h18v14zM8 15.6 12.6 11H10V9h6v6h-2v-2.6L9.4 17z"/></svg>
+                                </button>
+                                <button type="button" class="stage-btn" id="yt-video-fullscreen-btn" aria-label="Full screen" title="Full screen">
+                                    <svg class="stage-icon-off" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+                                    <svg class="stage-icon-on" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/></svg>
+                                </button>
+                                <button type="button" class="stage-btn" id="yt-video-close-btn" aria-label="Close the visualizer and video" title="Close (flip the switch in the player to bring it back)">
+                                    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06z"/></svg>
+                                </button>
+                            </div>
+                            <div class="stage-controls-bottom">
+                                <button type="button" class="stage-btn stage-play-btn" id="stage-play-btn" aria-label="Play" title="Play">
+                                    <svg class="stage-icon-play" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3 1.713a.7.7 0 0 1 1.05-.607l10.89 6.288a.7.7 0 0 1 0 1.212L4.05 14.894A.7.7 0 0 1 3 14.288V1.713z"/></svg>
+                                    <svg class="stage-icon-pause" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M2.7 1a.7.7 0 0 0-.7.7v12.6a.7.7 0 0 0 .7.7h2.6a.7.7 0 0 0 .7-.7V1.7a.7.7 0 0 0-.7-.7H2.7zm8 0a.7.7 0 0 0-.7.7v12.6a.7.7 0 0 0 .7.7h2.6a.7.7 0 0 0 .7-.7V1.7a.7.7 0 0 0-.7-.7h-2.6z"/></svg>
+                                </button>
+                                <button type="button" class="stage-btn viz-only" id="stage-prev-btn" aria-label="Previous look" title="Previous look">
+                                    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.03.47a.75.75 0 0 1 0 1.06L4.56 8l6.47 6.47a.75.75 0 1 1-1.06 1.06L2.44 8 9.97.47a.75.75 0 0 1 1.06 0z"/></svg>
+                                </button>
+                                <label class="visually-hidden" for="stage-look-select">Visualizer look</label>
+                                <select class="stage-look-select viz-only" id="stage-look-select"></select>
+                                <button type="button" class="stage-btn viz-only" id="stage-next-btn" aria-label="Next look" title="Next look (or tap the visualizer)">
+                                    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4.97.47a.75.75 0 0 0 0 1.06L11.44 8l-6.47 6.47a.75.75 0 1 0 1.06 1.06L13.56 8 6.03.47a.75.75 0 0 0-1.06 0z"/></svg>
+                                </button>
+                                <button type="button" class="stage-btn stage-text-btn video-only" id="yt-video-cc-btn" aria-pressed="false" hidden>CC</button>
+                                <a class="stage-btn stage-text-btn video-only" id="yt-video-watch-link" href="#" target="_blank" rel="noopener noreferrer">YouTube ↗</a>
+                            </div>
+                        </div>
+                        <span class="stage-resize" id="stage-resize-handle" aria-hidden="true"></span>
+                    </div>
                     <div class="yt-video-head">
                         <div class="yt-video-meta">
                             <span class="hero-eyebrow" id="yt-video-eyebrow">VIDEO</span>
                             <h2 class="yt-video-title" id="yt-video-title" tabindex="-1"></h2>
                             <p class="yt-video-license" id="yt-video-license"></p>
                         </div>
-                        <div class="yt-video-actions" role="group" aria-label="Video controls">
-                            <button type="button" class="detail-row-btn" id="yt-video-cc-btn" aria-pressed="false" hidden>Captions</button>
-                            <button type="button" class="detail-row-btn" id="yt-video-fullscreen-btn">Full screen</button>
-                            <a class="detail-row-btn" id="yt-video-watch-link" href="#" target="_blank" rel="noopener noreferrer">Open on YouTube</a>
-                            <button type="button" class="detail-row-btn" id="yt-video-close-btn">Hide video</button>
-                        </div>
-                    </div>
-                    <div class="yt-video-frame" id="yt-video-frame">
-                        <video class="yt-video" id="yt-video" muted playsinline preload="auto" disableremoteplayback aria-label="Music video, muted; the sound plays in the player below"></video>
                     </div>
                     <p class="yt-video-note" id="yt-video-note" role="status" aria-live="polite"></p>
                 </section>
@@ -866,13 +898,16 @@
             </div>
 
             <div class="right-section">
-                <button type="button" class="icon-btn playbar-video-btn" id="playbar-video-btn" aria-pressed="false" aria-controls="yt-video-panel" title="Show the music video" hidden>
-                    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1.5 3.5A1.5 1.5 0 0 1 3 2h7a1.5 1.5 0 0 1 1.5 1.5v1.38l2.88-1.66A.75.75 0 0 1 15.5 3.87v8.26a.75.75 0 0 1-1.12.65L11.5 11.12v1.38A1.5 1.5 0 0 1 10 14H3a1.5 1.5 0 0 1-1.5-1.5v-9z"/></svg>
-                    <span class="playbar-video-label">Video</span>
-                </button>
-                <button type="button" class="crossfade-pill" id="crossfade-badge" title="Click to cycle Crossfade (0–12s) or Shift-click for Audio Engine settings">
-                    <span>XFADE 0s</span>
-                </button>
+                <div class="playbar-stack">
+                    <button type="button" class="crossfade-pill" id="crossfade-badge" title="Click to cycle Crossfade (0–12s) or Shift-click for Audio Engine settings">
+                        <span>XFADE 0s</span>
+                    </button>
+                    <button type="button" class="stage-switch playbar-video-btn" id="playbar-video-btn" role="switch" aria-checked="false" aria-controls="yt-video-panel" aria-label="Music video" title="Switch to the music video">
+                        <svg class="stage-switch-icon stage-switch-note" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M13.5 1.2a.75.75 0 0 0-.9-.73l-7 1.5A.75.75 0 0 0 5 2.7v7.45A2.5 2.5 0 1 0 6.5 12.5V5.86l5.5-1.18v4.47a2.5 2.5 0 1 0 1.5 2.35V1.2z"/></svg>
+                        <span class="stage-switch-track" aria-hidden="true"><span class="stage-switch-thumb"></span></span>
+                        <svg class="stage-switch-icon stage-switch-video" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1.5 3.5A1.5 1.5 0 0 1 3 2h7a1.5 1.5 0 0 1 1.5 1.5v1.38l2.88-1.66A.75.75 0 0 1 15.5 3.87v8.26a.75.75 0 0 1-1.12.65L11.5 11.12v1.38A1.5 1.5 0 0 1 10 14H3a1.5 1.5 0 0 1-1.5-1.5v-9z"/></svg>
+                    </button>
+                </div>
                 <button type="button" class="mute" id="volume-btn" aria-label="Mute or Unmute">
                     <svg data-encore-id="icon" role="presentation" aria-label="Volume high" aria-hidden="true" id="volume-icon" viewBox="0 0 16 16">
                         <path d="M9.741.85a.75.75 0 0 1 .375.65v13a.75.75 0 0 1-1.125.65l-6.925-4a3.642 3.642 0 0 1-1.33-4.967 3.639 3.639 0 0 1 1.33-1.332l6.925-4a.75.75 0 0 1 .75 0zm-6.924 5.3a2.139 2.139 0 0 0 0 3.7l5.8 3.35V2.8l-5.8 3.35zm8.683 4.29V5.56a2.75 2.75 0 0 1 0 4.88z"></path>

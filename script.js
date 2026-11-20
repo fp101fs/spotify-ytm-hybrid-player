@@ -293,6 +293,8 @@ function updatePlayButtonIcon(isPaused) {
     const playBtn = document.getElementById("play");
     if (!playBtn) return;
     playBtn.innerHTML = isPaused ? PAUSE_SVG : PLAY_SVG;
+    const stage = getStage();
+    if (stage) stage.syncPlayState();
 }
 
 function syncActiveTrackUI() {
@@ -1331,22 +1333,29 @@ function createQueueItemNode(track, idx, totalCount) {
             </div>
             <span class="queue-item-artist">${subText}</span>
         </div>
+        <div class="queue-item-actions" role="group" aria-label="Queue actions for ${track.title}">
+            <button type="button" class="queue-action-btn" data-queue-action="move-up" title="Move up" aria-label="Move ${track.title} up in queue" ${idx === 0 ? "disabled" : ""}>
+                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 3.5 2.5 9l1.06 1.06L8 5.62l4.44 4.44L13.5 9 8 3.5z"/></svg>
+                <span class="queue-action-label" aria-hidden="true">Up</span>
+            </button>
+            <button type="button" class="queue-action-btn" data-queue-action="move-down" title="Move down" aria-label="Move ${track.title} down in queue" ${idx === totalCount - 1 ? "disabled" : ""}>
+                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 12.5 2.5 7l1.06-1.06L8 10.38l4.44-4.44L13.5 7 8 12.5z"/></svg>
+                <span class="queue-action-label" aria-hidden="true">Down</span>
+            </button>
+            <button type="button" class="queue-action-btn" data-queue-action="play-next" title="Promote to Play Next" aria-label="Play ${track.title} next">
+                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M2 3.75A.75.75 0 0 1 2.75 3h7.5a.75.75 0 0 1 0 1.5h-7.5A.75.75 0 0 1 2 3.75zm0 4A.75.75 0 0 1 2.75 7h5.5a.75.75 0 0 1 0 1.5h-5.5A.75.75 0 0 1 2 7.75zm9.5-.5v2.25H9.25a.75.75 0 0 0 0 1.5h2.25v2.25a.75.75 0 0 0 1.5 0V11h2.25a.75.75 0 0 0 0-1.5H13V7.25a.75.75 0 0 0-1.5 0z"/></svg>
+                <span class="queue-action-label" aria-hidden="true">Play next</span>
+            </button>
+            <button type="button" class="queue-action-btn remove-btn" data-queue-action="remove" title="Remove from queue" aria-label="Remove ${track.title} from queue">
+                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06z"/></svg>
+                <span class="queue-action-label" aria-hidden="true">Remove</span>
+            </button>
+        </div>
         <div class="queue-item-right">
-            <div class="queue-item-actions" role="group" aria-label="Queue actions for ${track.title}">
-                <button type="button" class="queue-action-btn" data-queue-action="move-up" title="Move up" aria-label="Move ${track.title} up in queue" ${idx === 0 ? "disabled" : ""}>
-                    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 3.5 2.5 9l1.06 1.06L8 5.62l4.44 4.44L13.5 9 8 3.5z"/></svg>
-                </button>
-                <button type="button" class="queue-action-btn" data-queue-action="move-down" title="Move down" aria-label="Move ${track.title} down in queue" ${idx === totalCount - 1 ? "disabled" : ""}>
-                    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 12.5 2.5 7l1.06-1.06L8 10.38l4.44-4.44L13.5 7 8 12.5z"/></svg>
-                </button>
-                <button type="button" class="queue-action-btn" data-queue-action="play-next" title="Promote to Play Next" aria-label="Play ${track.title} next">
-                    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M2 3.75A.75.75 0 0 1 2.75 3h7.5a.75.75 0 0 1 0 1.5h-7.5A.75.75 0 0 1 2 3.75zm0 4A.75.75 0 0 1 2.75 7h5.5a.75.75 0 0 1 0 1.5h-5.5A.75.75 0 0 1 2 7.75zm9.5-.5v2.25H9.25a.75.75 0 0 0 0 1.5h2.25v2.25a.75.75 0 0 0 1.5 0V11h2.25a.75.75 0 0 0 0-1.5H13V7.25a.75.75 0 0 0-1.5 0z"/></svg>
-                </button>
-                <button type="button" class="queue-action-btn remove-btn" data-queue-action="remove" title="Remove from queue" aria-label="Remove ${track.title} from queue">
-                    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06z"/></svg>
-                </button>
-            </div>
             <span class="queue-item-duration">${track.durationFormatted || "0:00"}</span>
+            <button type="button" class="queue-more-btn" aria-label="More actions for ${track.title}" aria-expanded="false" title="More actions">
+                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3 9.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg>
+            </button>
         </div>
     `;
 
@@ -1379,6 +1388,23 @@ function createQueueItemNode(track, idx, totalCount) {
                     removeTrackFromQueue(currentQueueId);
                 }
             });
+        });
+    }
+
+    // Touch screens: the ⋯ button opens this row's actions underneath the title (one row at a time)
+    const moreBtn = typeof item.querySelector === "function" ? item.querySelector(".queue-more-btn") : null;
+    if (moreBtn && typeof moreBtn.addEventListener === "function") {
+        moreBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const open = !item.classList.contains("actions-open");
+            document.querySelectorAll(".queue-item.actions-open").forEach((other) => {
+                if (other === item) return;
+                other.classList.remove("actions-open");
+                const btn = other.querySelector(".queue-more-btn");
+                if (btn) btn.setAttribute("aria-expanded", "false");
+            });
+            item.classList.toggle("actions-open", open);
+            moreBtn.setAttribute("aria-expanded", String(open));
         });
     }
 
@@ -6366,7 +6392,18 @@ function handleShellKeyDown(event) {
     return { handled: false };
 }
 
+/** The navbar is two rows (and taller on phones); the sticky mood chips sit right under it. */
+function trackNavbarHeight() {
+    const nav = document.querySelector(".navbar");
+    if (!nav || typeof ResizeObserver !== "function" || !document.documentElement) return;
+    const apply = () => document.documentElement.style.setProperty("--navbar-height", `${nav.offsetHeight}px`);
+    new ResizeObserver(apply).observe(nav);
+    apply();
+}
+
 function initShellControls() {
+    trackNavbarHeight();
+
     // 1. Mood & Activity Filter Chips
     document.querySelectorAll("#mood-chips-bar .mood-chip").forEach((chip) => {
         chip.addEventListener("click", () => {
@@ -9906,21 +9943,95 @@ function getYouTubeVideoEl() {
     return document.getElementById("yt-video");
 }
 
+// ---------- visualizer stage (visualizer.js) ----------
+// The panel shows the visualizer by default and the video when the playbar switch is on the video side.
+// Its × closes the whole stage (remembered across reloads); flipping the switch brings it back.
+
+const STAGE_CLOSED_KEY = "spottube-stage-closed";
+let stageClosed = readStageClosed();
+
+function readStageClosed() {
+    try {
+        return typeof localStorage !== "undefined" && localStorage.getItem(STAGE_CLOSED_KEY) === "1";
+    } catch (_) {
+        return false;
+    }
+}
+
+function setStageClosed(closed) {
+    stageClosed = Boolean(closed);
+    try {
+        if (typeof localStorage !== "undefined") {
+            if (stageClosed) localStorage.setItem(STAGE_CLOSED_KEY, "1");
+            else localStorage.removeItem(STAGE_CLOSED_KEY);
+        }
+    } catch (_) {}
+}
+
+function getStage() {
+    const api = typeof window !== "undefined" ? window.SpotTubeStage : null;
+    return api && api.instance ? api.instance : null;
+}
+
+/** Shows or hides the stage and picks what it shows: the video while one is open, else the visualizer. */
+function applyStage() {
+    const mode = ytVideo.open ? "video" : "visualizer";
+    const panel = document.getElementById("yt-video-panel");
+    if (panel) {
+        panel.hidden = stageClosed;
+        if (panel.dataset) panel.dataset.stageMode = mode;
+    }
+    const frame = document.getElementById("media-stage-frame");
+    if (frame && frame.dataset) frame.dataset.mode = mode;
+    const stage = getStage();
+    if (stage) stage.sync({ mode, visible: !stageClosed });
+    updateYouTubeToggle();
+}
+
+/** The stage's ×: closes the video too, so the switch starts from the visualizer side next time. */
+function closeStage() {
+    setStageClosed(true);
+    closeYouTubeVideo({ returnFocus: true });
+}
+
+/** Playbar switch: music note = visualizer, video icon = the music video (YouTube songs only). */
+function handleStageSwitch() {
+    const track = songs[currentTrackIndex];
+    if (isYouTubeTrack(track)) {
+        toggleYouTubeVideo();
+        return;
+    }
+    if (stageClosed) {
+        setStageClosed(false);
+        applyStage();
+        return;
+    }
+    const stage = getStage();
+    if (stage) stage.showHint("This song has no video", 2200);
+}
+
 function updateYouTubeToggle(track = songs[currentTrackIndex]) {
     const btn = document.getElementById("playbar-video-btn");
     if (!btn) return;
-    const show = isYouTubeTrack(track);
-    btn.hidden = !show;
-    const on = show && ytVideo.open && ytVideo.trackId === track.id;
-    btn.setAttribute("aria-pressed", String(on));
+    btn.hidden = false;
+    const hasVideo = Boolean(track) && isYouTubeTrack(track);
+    const on = hasVideo && !stageClosed && ytVideo.open && ytVideo.trackId === track.id;
+    btn.setAttribute("aria-checked", String(on));
     btn.classList.toggle("active", on);
-    btn.title = on ? "Hide the music video" : "Show the music video";
+    btn.classList.toggle("no-video", !hasVideo);
+    btn.title = !hasVideo
+        ? stageClosed
+            ? "Show the visualizer"
+            : "This song has no video, so the visualizer plays"
+        : on
+          ? "Switch to the visualizer"
+          : "Switch to the music video";
 }
 
-/** Track changed (syncActiveTrackUI): reopen the video for the next YouTube track, hide it for other songs. */
+/** Track changed (syncActiveTrackUI): reopen the video for the next YouTube track, show the visualizer for other songs. */
 function updateYouTubeForTrack(track) {
     if (isYouTubeTrack(track)) {
-        if (ytVideoWanted && (!ytVideo.open || ytVideo.trackId !== track.id)) {
+        if (ytVideoWanted && !stageClosed && (!ytVideo.open || ytVideo.trackId !== track.id)) {
             openYouTubeVideo(track, { quiet: true });
         }
     } else if (ytVideo.open) {
@@ -9948,6 +10059,7 @@ function openYouTubeVideo(track = songs[currentTrackIndex], options = {}) {
     const panel = document.getElementById("yt-video-panel");
     const video = getYouTubeVideoEl();
     if (!panel || !video) return false;
+    if (!options.quiet) setStageClosed(false);
     ytVideoWanted = true;
     const token = ++ytVideo.token;
     ytVideo = { open: true, mode: "video", trackId: track.id, withSound: false, captions: [], captionsOn: false, token };
@@ -9959,8 +10071,7 @@ function openYouTubeVideo(track = songs[currentTrackIndex], options = {}) {
     video.src = track.videoUrl || YT.streamUrl(track.youtubeId, "video");
     if (typeof video.load === "function") video.load();
     setYouTubeNote("The sound keeps playing in the player below; the video follows it.");
-    panel.hidden = false;
-    updateYouTubeToggle(track);
+    applyStage();
     loadYouTubeCaptions(track, token);
     if (!options.quiet) revealYouTubePanel();
     if (!options.quiet && options.focus) focusYouTubePanel();
@@ -10053,7 +10164,6 @@ function showYouTubeVideoError(track, code) {
 }
 
 function closeYouTubeVideo(options = {}) {
-    const panel = document.getElementById("yt-video-panel");
     const video = getYouTubeVideoEl();
     if (video) {
         if (typeof video.pause === "function") video.pause();
@@ -10061,11 +10171,10 @@ function closeYouTubeVideo(options = {}) {
         if (typeof video.querySelectorAll === "function") video.querySelectorAll("track").forEach((t) => t.remove());
         if (typeof video.load === "function") video.load();
     }
-    if (panel) panel.hidden = true;
     ytVideo = { open: false, mode: "video", trackId: null, withSound: false, captions: [], captionsOn: false, token: ytVideo.token + 1 };
     if (!options.keepWanted) ytVideoWanted = false;
     setYouTubeNote("");
-    updateYouTubeToggle();
+    applyStage();
     if (options.returnFocus) {
         const btn = document.getElementById("playbar-video-btn");
         if (btn && !btn.hidden) btn.focus();
@@ -10120,7 +10229,9 @@ function syncYouTubeVideo() {
 }
 
 function requestYouTubeFullscreen() {
-    const frame = document.getElementById("yt-video-frame");
+    const stage = getStage();
+    if (stage) return stage.toggleFullscreen();
+    const frame = document.getElementById("media-stage-frame") || document.getElementById("yt-video-frame");
     const video = getYouTubeVideoEl();
     if (frame && typeof frame.requestFullscreen === "function") {
         const p = frame.requestFullscreen();
@@ -10869,10 +10980,10 @@ function initYouTubeControls() {
         });
     }
     const toggle = document.getElementById("playbar-video-btn");
-    if (toggle) toggle.addEventListener("click", () => toggleYouTubeVideo());
+    if (toggle) toggle.addEventListener("click", () => handleStageSwitch());
     const close = document.getElementById("yt-video-close-btn");
     if (close) {
-        close.addEventListener("click", () => closeYouTubeVideo({ returnFocus: true }));
+        close.addEventListener("click", () => closeStage());
     }
     const cc = document.getElementById("yt-video-cc-btn");
     if (cc) cc.addEventListener("click", () => setYouTubeCaptions(!ytVideo.captionsOn));
@@ -10886,7 +10997,28 @@ function initYouTubeControls() {
             if (track && ytVideo.mode === "video" && video.getAttribute("src")) showYouTubeVideoError(track, "UPSTREAM");
         });
     }
+    initVisualizerStage();
     updateYouTubeCount();
+}
+
+function initVisualizerStage() {
+    const api = typeof window !== "undefined" ? window.SpotTubeStage : null;
+    if (api && typeof api.init === "function") {
+        try {
+            api.init({
+                getTap: () => {
+                    const pe = getPlayerEngine();
+                    return pe && typeof pe.getVisualizerTap === "function" ? pe.getVisualizerTap() : null;
+                },
+                isPaused: () => !currentSong || Boolean(currentSong.paused),
+                togglePlay: () => togglePlayPause(),
+                vendorBase: "vendor/butterchurn/",
+            });
+        } catch (err) {
+            console.warn("Visualizer failed to start", err);
+        }
+    }
+    applyStage();
 }
 
 window.SpotTubeShell = {
@@ -10896,6 +11028,8 @@ window.SpotTubeShell = {
     getYouTubeAllowlist: () => ytAllowlist.slice(),
     getYouTubeApiState: () => ({ ...ytApiState }),
     getYouTubeVideoState: () => ({ ...ytVideo, wanted: ytVideoWanted }),
+    getStageState: () => ({ closed: stageClosed, mode: ytVideo.open ? "video" : "visualizer" }),
+    handleStageSwitch,
     setYouTubeApiStatus,
     checkYouTubeApi,
     addYouTubeVideo,

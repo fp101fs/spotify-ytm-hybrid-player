@@ -533,25 +533,29 @@ test("app: without the server, playing a YouTube track shows an error and never 
     shell.playMusic(track);
     for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
     assert.strictEqual(shell.getYouTubeVideoState().open, false);
-    assert.strictEqual(el("yt-video-panel").hidden, true);
+    assert.strictEqual(el("yt-video-panel").dataset.stageMode, "visualizer", "the stage stays on the visualizer");
     assert.match(el("library-toast").textContent, /“Carefree”: YouTube videos need the app's small server/);
 });
 
-test("app: the playbar Video toggle shows the synced muted video, captions, and hides for other songs", async () => {
+test("app: the playbar switch flips the stage between visualizer and the synced muted video, with captions", async () => {
     const { shell, el } = await youtubeShell({ captions: [{ lang: "en", name: "English", auto: false }] });
     shell.addYouTubeVideo(ID);
     const track = shell.getYouTubeTracks()[0];
     shell.playMusic(track);
     const toggle = el("playbar-video-btn");
+    const panel = el("yt-video-panel");
     assert.strictEqual(toggle.hidden, false);
-    assert.strictEqual(toggle.getAttribute("aria-pressed"), "false");
+    assert.strictEqual(toggle.getAttribute("aria-checked"), "false", "starts on the visualizer side");
+    assert.strictEqual(panel.hidden, false, "the visualizer shows by default");
+    assert.strictEqual(panel.dataset.stageMode, "visualizer");
 
     toggle.click();
-    assert.strictEqual(toggle.getAttribute("aria-pressed"), "true");
+    assert.strictEqual(toggle.getAttribute("aria-checked"), "true");
     const video = el("yt-video");
     assert.strictEqual(video.src, `api/yt/stream?id=${ID}&kind=video`);
     assert.strictEqual(video.muted, true);
-    assert.strictEqual(el("yt-video-panel").hidden, false);
+    assert.strictEqual(panel.hidden, false);
+    assert.strictEqual(panel.dataset.stageMode, "video");
     assert.match(el("yt-video-title").textContent, /Carefree — Kevin MacLeod/);
     await new Promise((r) => setImmediate(r));
     assert.strictEqual(el("yt-video-cc-btn").hidden, false, "captions offered");
@@ -575,19 +579,48 @@ test("app: the playbar Video toggle shows the synced muted video, captions, and 
     assert.strictEqual(video.currentTime, 42);
     assert.strictEqual(video.paused, false);
 
-    // A non-YouTube song hides the panel and the toggle; the next YouTube song brings the video back
-    shell.playMusic(0);
-    assert.strictEqual(el("yt-video-panel").hidden, true);
-    assert.strictEqual(toggle.hidden, true);
-    shell.playMusic(track);
-    assert.strictEqual(el("yt-video-panel").hidden, false);
-    assert.strictEqual(toggle.getAttribute("aria-pressed"), "true");
+    // Flip back: visualizer, the video is unloaded
+    toggle.click();
+    assert.strictEqual(toggle.getAttribute("aria-checked"), "false");
+    assert.strictEqual(panel.dataset.stageMode, "visualizer");
+    assert.strictEqual(shell.getYouTubeVideoState().open, false);
+    toggle.click();
+    assert.strictEqual(panel.dataset.stageMode, "video");
 
-    // Hide video: focus goes back to the toggle, audio keeps going
+    // A non-YouTube song shows the visualizer (switch greyed on the video side); the next YouTube song brings the video back
+    shell.playMusic(0);
+    assert.strictEqual(panel.hidden, false);
+    assert.strictEqual(panel.dataset.stageMode, "visualizer");
+    assert.strictEqual(toggle.hidden, false);
+    assert.strictEqual(toggle.getAttribute("aria-checked"), "false");
+    assert.ok(toggle.classList.contains("no-video"));
+    toggle.click();
+    assert.strictEqual(panel.dataset.stageMode, "visualizer", "no video to switch to");
+    shell.playMusic(track);
+    assert.strictEqual(panel.dataset.stageMode, "video");
+    assert.strictEqual(toggle.getAttribute("aria-checked"), "true");
+    assert.ok(!toggle.classList.contains("no-video"));
+
+    // × closes the whole stage and the video; audio keeps going
     el("yt-video-close-btn").click();
-    assert.strictEqual(el("yt-video-panel").hidden, true);
-    assert.strictEqual(toggle.getAttribute("aria-pressed"), "false");
+    assert.strictEqual(panel.hidden, true);
+    assert.strictEqual(toggle.getAttribute("aria-checked"), "false");
     assert.strictEqual(shell.getYouTubeVideoState().wanted, false);
+    assert.strictEqual(shell.getStageState().closed, true);
+
+    // Flipping the switch brings it back (here: to the video, since this song has one)
+    toggle.click();
+    assert.strictEqual(panel.hidden, false);
+    assert.strictEqual(panel.dataset.stageMode, "video");
+    assert.strictEqual(shell.getStageState().closed, false);
+
+    // On a song without a video, flipping the switch after × brings back the visualizer
+    el("yt-video-close-btn").click();
+    shell.playMusic(0);
+    assert.strictEqual(panel.hidden, true);
+    toggle.click();
+    assert.strictEqual(panel.hidden, false);
+    assert.strictEqual(panel.dataset.stageMode, "visualizer");
 });
 
 test("app: a failing YouTube stream shows the mapped message and leaves mixes until reload", async () => {
@@ -602,7 +635,7 @@ test("app: a failing YouTube stream shows the mapped message and leaves mixes un
     assert.ok(!shell.getQueueCatalog().includes(track));
 });
 
-test("HTML/CSS hooks: labelled add box, aria-pressed toggle, video panel, script order", () => {
+test("HTML/CSS hooks: labelled add box, stage switch, video panel, script order", () => {
     const html = read("index.html");
     assert.ok(html.indexOf('src="youtube.js"') < html.indexOf('src="script.js"'));
     assert.match(html, /<label[^>]*for="yt-add-input"[^>]*>Add YouTube video<\/label>/);
@@ -610,7 +643,12 @@ test("HTML/CSS hooks: labelled add box, aria-pressed toggle, video panel, script
     assert.match(html, /id="yt-add-notice">Notice: only add videos you have the right to play/);
     assert.match(html, /aria-describedby="yt-add-help yt-add-notice yt-add-status"/);
     assert.doesNotMatch(html, /Only videos on this site's public-domain list can play/);
-    assert.match(html, /id="playbar-video-btn"[^>]*aria-pressed="false"[^>]*aria-controls="yt-video-panel"/);
+    assert.match(html, /id="playbar-video-btn"[^>]*role="switch"[^>]*aria-checked="false"[^>]*aria-controls="yt-video-panel"/);
+    assert.ok(html.indexOf('id="crossfade-badge"') < html.indexOf('id="playbar-video-btn"'), "switch sits below XFADE");
+    assert.ok(html.indexOf('src="visualizer.js"') < html.indexOf('src="script.js"'));
+    for (const id of ["media-stage-frame", "viz-canvas", "viz-canvas-gl", "stage-look-select", "stage-play-btn", "stage-pip-btn", "yt-video-fullscreen-btn", "yt-video-close-btn", "stage-hint"]) {
+        assert.match(html, new RegExp(`id="${id}"`), id);
+    }
     assert.match(html, /<video[^>]*id="yt-video"[^>]*muted[^>]*playsinline/);
     assert.match(html, /id="yt-video-cc-btn" aria-pressed="false"/);
     assert.match(html, /id="lib-youtube" data-collection="youtube"/);
