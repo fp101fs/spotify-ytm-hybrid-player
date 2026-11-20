@@ -10,6 +10,7 @@
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
+const { spawn } = require("node:child_process");
 
 const ROOT = path.resolve(__dirname, "..");
 const PORT = Number(process.env.PORT) || 5500;
@@ -147,16 +148,67 @@ function serveStatic(req, res, pathname) {
     fs.createReadStream(file).pipe(res);
 }
 
+// Exit code that tells the supervisor below to start the server again (after an update).
+const RESTART_CODE = 75;
+
+// One-click updates (scripts/updater.js). Local only: Vercel never runs this file. The custom header can't be sent
+// cross-site without a CORS preflight (which we don't answer), so other web pages can't trigger an update.
+function serveUpdate(req, res, pathname) {
+    const json = (status, body) => send(res, status, JSON.stringify(body), { "Content-Type": "application/json; charset=utf-8" });
+    if (req.headers["x-spottube-update"] !== "1") return json(403, { message: "Forbidden" });
+    const updater = require("./updater.js");
+    const isApply = pathname === "/__update/apply";
+    if (isApply && req.method !== "POST") return json(405, { message: "Use POST" });
+    (isApply ? updater.apply() : updater.check())
+        .then((result) => {
+            const canRestart = Boolean(process.env.SPOTTUBE_SUPERVISED);
+            if (isApply && result.restart && !canRestart) {
+                result = { ...result, restart: false, message: "Updated. Stop the server and run npm start again to finish." };
+            }
+            if (isApply && result.restart) res.on("finish", () => setTimeout(() => process.exit(RESTART_CODE), 200));
+            json(200, result);
+        })
+        .catch((err) => json(500, { ok: false, message: `Update failed: ${err.message}` }));
+}
+
 function createServer() {
     return http.createServer((req, res) => {
         const { pathname } = new URL(req.url || "/", "http://localhost");
+        if (pathname === "/__update/status" || pathname === "/__update/apply") return serveUpdate(req, res, pathname);
         if (pathname === "/api" || pathname.startsWith("/api/")) return serveApi(req, res, pathname);
         if (req.method !== "GET" && req.method !== "HEAD") return send(res, 405, "Method not allowed", { Allow: "GET, HEAD" });
         serveStatic(req, res, pathname);
     });
 }
 
-if (require.main === module) {
+// `npm start` runs a tiny supervisor that runs the real server as a child and restarts it after an update.
+function supervise() {
+    let child = null;
+    for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+        process.on(sig, () => {
+            if (child && child.exitCode == null) child.kill(sig);
+            else process.exit(0);
+        });
+    }
+    const start = () => {
+        child = spawn(process.execPath, [__filename], {
+            stdio: "inherit",
+            env: { ...process.env, SPOTTUBE_SUPERVISED: "1" },
+        });
+        child.on("exit", (code, signal) => {
+            if (code === RESTART_CODE) {
+                console.log("[dev-server] Restarting with the update…");
+                return start();
+            }
+            process.exit(code == null ? (signal ? 1 : 0) : code);
+        });
+    };
+    start();
+}
+
+if (require.main === module && !process.env.SPOTTUBE_SUPERVISED) {
+    supervise();
+} else if (require.main === module) {
     createServer().listen(PORT, HOST, () => {
         console.log(`SpotTube dev server: http://${HOST}:${PORT}  (static files + /api/yt, no caching)`);
     });

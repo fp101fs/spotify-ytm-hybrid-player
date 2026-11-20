@@ -4600,6 +4600,33 @@ span.detail-track-cover.import-shimmer {
     block-size: 18px;
 }
 
+/* One-click updates (app-update.js): a dot on the gear when an update is ready */
+.settings-btn {
+    position: relative;
+}
+
+.settings-btn.has-update::after {
+    content: "";
+    position: absolute;
+    inset-block-start: 4px;
+    inset-inline-end: 4px;
+    inline-size: 9px;
+    block-size: 9px;
+    border-radius: 50%;
+    background: var(--accent-spotify);
+    box-shadow: 0 0 0 2px var(--bg-base, #000);
+}
+
+#setting-update-btn {
+    margin-block-start: 8px;
+}
+
+#setting-update-btn:disabled {
+    opacity: 0.6;
+    cursor: progress;
+    transform: none;
+}
+
 .settings-btn:hover {
     background-color: rgba(255, 255, 255, 0.08);
 }

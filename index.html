@@ -15,6 +15,7 @@
 <script src="youtube.js" defer></script>
     <script src="downloads.js" defer></script>
     <script src="visualizer.js" defer></script>
+    <script src="app-update.js" defer></script>
     <script src="script.js" defer></script>
 </head>
 <body>
@@ -1085,6 +1086,11 @@
                     </div>
                     <div class="settings-usage-bar" role="progressbar" aria-label="Downloads space used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="setting-download-bar"></span></div>
                     <p class="settings-desc settings-usage" id="setting-download-usage" aria-live="polite">Checking the downloads folder…</p>
+                </section>
+                <section class="settings-section" id="settings-updates" aria-labelledby="settings-updates-heading" hidden>
+                    <h3 class="settings-section-title" id="settings-updates-heading">Updates</h3>
+                    <p class="settings-desc" id="setting-update-status" aria-live="polite">Checking for updates…</p>
+                    <button type="button" class="hero-secondary-btn" id="setting-update-btn">Check for updates</button>
                 </section>
                 <div class="playlist-dialog-actions">
                     <button type="button" class="hero-primary-btn" id="settings-done-btn">Done</button>
