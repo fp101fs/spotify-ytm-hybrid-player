@@ -11,6 +11,10 @@
  *   GET /api/yt/radio?id=                   → the song's YouTube Music radio (same shape as search), for Start mix
  *   POST /api/yt/cookies (export JSON/text) → saves YouTube sign-in cookies as HttpOnly cookies (see yt-cookies.js)
  *   DELETE /api/yt/cookies                  → forgets them
+ *   GET /api/yt/downloads                   → auto-download folder: used/free bytes and the saved songs
+ *   POST /api/yt/download?id=&artist=&title=&maxBytes=&minFreeBytes= → saves the audio to disk (see downloads.js)
+ *
+ * A downloaded song's /stream is served from the file on disk (instant, offline), not from YouTube.
  *
  * Any valid video ID is served (the app shows a rights notice; yt-allowlist.json is only the suggestions and
  * their credits). The googlevideo URLs are tied to the server's IP and send no
@@ -263,6 +267,18 @@ async function readBody(req) {
     return Buffer.concat(chunks).toString("utf8");
 }
 
+/** Refuses writes from other sites (a browser always sends Origin on cross-site POSTs). */
+function sameOrigin(req) {
+    const origin = req.headers.origin;
+    const host = req.headers["x-forwarded-host"] || req.headers.host;
+    if (!origin || !host) return true;
+    try {
+        return new URL(origin).host === String(host).split(",")[0].trim();
+    } catch (_) {
+        return false;
+    }
+}
+
 function routeOf(url) {
     const m = /\/api\/yt\/([a-z]+)\/?$/i.exec(url.pathname);
     return (m ? m[1] : url.searchParams.get("action") || "").toLowerCase();
@@ -276,6 +292,7 @@ function createYtHandler(options = {}) {
     const infoCache = new Map(); // id → { promise, expiresAt }
     const captionCache = new Map(); // `${id}|${lang}` → text
     const discoveryCache = new Map(); // `${kind}|${query}` → { promise, expiresAt }
+    const downloads = options.downloads || null;
 
     /** Search/suggest answers, cached for a few minutes per query (typing repeats them a lot). */
     function discover(kind, rawQuery) {
@@ -357,6 +374,10 @@ function createYtHandler(options = {}) {
     async function handleStream(req, url, res) {
         const { id } = requireId(url.searchParams.get("id"));
         const kind = url.searchParams.get("kind") === "video" ? "video" : "audio";
+        if (kind === "audio" && downloads) {
+            const saved = await downloads.find(id);
+            if (saved) return serveFile(req, res, saved);
+        }
         const cookie = Cookies.readAuth(req);
         const info = await getInfo(id, cookie);
         const format = chooseFormat(info.formats, kind);
@@ -433,6 +454,62 @@ function createYtHandler(options = {}) {
         stream.pipe(res);
     }
 
+    /** A downloaded file, with Range support like the proxy. */
+    function serveFile(req, res, saved) {
+        const size = saved.size;
+        const range = parseRange(req.headers.range, size, maxChunk);
+        const headers = {
+            "Content-Type": saved.contentType,
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        };
+        if (range && range.unsatisfiable) {
+            res.writeHead(416, { ...headers, "Content-Range": `bytes */${size}`, "Content-Length": 0 });
+            res.end();
+            return;
+        }
+        const start = range ? range.start : 0;
+        const end = range ? range.end : size - 1;
+        if (range) headers["Content-Range"] = `bytes ${start}-${end}/${size}`;
+        headers["Content-Length"] = end - start + 1;
+        res.writeHead(range ? 206 : 200, headers);
+        if (req.method === "HEAD") return res.end();
+        fs.createReadStream(saved.path, { start, end }).on("error", () => res.destroy()).pipe(res);
+    }
+
+    async function handleDownload(req, url, res) {
+        if (req.method !== "POST") {
+            sendJson(res, 405, { error: { code: "METHOD", message: "Use POST." } }, { Allow: "POST" });
+            return;
+        }
+        if (!sameOrigin(req)) {
+            sendJson(res, 403, { error: { code: "ORIGIN", message: "Cross-site request refused." } });
+            return;
+        }
+        if (!downloads || !downloads.enabled) {
+            sendJson(res, 200, { status: "skipped", reason: "UNAVAILABLE" });
+            return;
+        }
+        const { id } = requireId(url.searchParams.get("id"));
+        const q = (k) => url.searchParams.get(k);
+        const cookie = Cookies.readAuth(req);
+        const result = await downloads.download(
+            { id, artist: q("artist") || "", title: q("title") || "" },
+            { maxBytes: q("maxBytes"), minFreeBytes: q("minFreeBytes") },
+            async () => {
+                const info = await getInfo(id, cookie);
+                const format = chooseAudioFormat(info.formats);
+                if (!format) throw Object.assign(new Error("no audio format"), { code: "NO_FORMAT" });
+                const size = Number(format.contentLength) || 0;
+                const stream = await adapter.openStream(info, format, size ? { start: 0, end: size - 1 } : {});
+                const container = format.container === "webm" || /^audio\/webm/.test(format.mimeType) ? "webm" : "mp4";
+                return { stream, size, container };
+            }
+        );
+        sendJson(res, 200, result);
+    }
+
     async function handleCaptions(req, url, res) {
         const { id } = requireId(url.searchParams.get("id"));
         const info = await getInfo(id, Cookies.readAuth(req));
@@ -466,9 +543,7 @@ function createYtHandler(options = {}) {
                 return;
             }
             // Only this app's own pages may set or clear them
-            const origin = req.headers.origin;
-            const host = req.headers["x-forwarded-host"] || req.headers.host;
-            if (origin && host && new URL(origin).host !== String(host).split(",")[0].trim()) {
+            if (!sameOrigin(req)) {
                 sendJson(res, 403, { error: { code: "ORIGIN", message: "Cross-site request refused." } });
                 return;
             }
@@ -491,6 +566,14 @@ function createYtHandler(options = {}) {
             await handleCookies(req, res);
             return;
         }
+        if (route === "download") {
+            try {
+                await handleDownload(req, url, res);
+            } catch (err) {
+                sendError(res, err, log, req);
+            }
+            return;
+        }
         if (req.method !== "GET" && req.method !== "HEAD") {
             sendJson(res, 405, { error: { code: "METHOD", message: "Use GET." } }, { Allow: "GET, HEAD" });
             return;
@@ -508,6 +591,7 @@ function createYtHandler(options = {}) {
                 });
             } else if (route === "info") await handleInfo(req, url, res);
             else if (route === "stream") await handleStream(req, url, res);
+            else if (route === "downloads") sendJson(res, 200, downloads ? await downloads.status() : { available: false });
             else if (route === "captions") await handleCaptions(req, url, res);
             else if (route === "search") sendJson(res, 200, { results: await discover("search", url.searchParams.get("q")) });
             else if (route === "suggest") sendJson(res, 200, { suggestions: await discover("suggest", url.searchParams.get("q")) });

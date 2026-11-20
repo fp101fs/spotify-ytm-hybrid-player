@@ -2,3 +2,4 @@ tests/
 PLAN.md
 *.log
 .DS_Store
+downloads/

@@ -984,7 +984,7 @@ function renderLibrarySidebar() {
                 <div class="lib-item-art"><img src="${track.coverUrl}" alt="${track.title}"></div>
                 <div class="lib-item-meta">
                     <span class="lib-item-title">${track.title}</span>
-                    <span class="lib-item-sub">${track.artistDisplay} &bull; ${track.durationFormatted || "0:00"}</span>
+                    <span class="lib-item-sub">${track.downloaded ? '<span class="lib-dl-badge" title="Downloaded" aria-label="Downloaded">↓</span>' : ""}${track.artistDisplay} &bull; ${track.durationFormatted || "0:00"}</span>
                 </div>
                 <div class="lib-item-actions">
                     <span class="lib-mini-btn" data-lib-action="open-detail" title="View Song Details: ${track.title}" aria-label="View Song Details for ${track.title}">
@@ -7012,6 +7012,7 @@ async function main() {
     await initFolderSources();
     initYouTubeControls();
     checkYouTubeApi();
+    initAutoDownloads();
     if (songs.length > 0) {
         playMusic(0, true);
     } else {
@@ -9325,6 +9326,7 @@ function openSettingsDialog(options = {}) {
         note.textContent = options.reason ? "Online lookup is off. Turn it on to look up song info, then close Settings to continue." : "";
     }
     setOnlineLookupEnabled(isOnlineLookupEnabled());
+    renderDownloadSettings({ refresh: true });
     setDialogOpen(dialog, true);
     const toggle = document.getElementById("setting-online-lookup");
     if (toggle && typeof toggle.focus === "function") toggle.focus();
@@ -9548,6 +9550,7 @@ function initMetadataLookupControls() {
         toggle.checked = isOnlineLookupEnabled();
         toggle.addEventListener("change", () => setOnlineLookupEnabled(Boolean(toggle.checked)));
     }
+    initDownloadSettingsControls();
     const settingsDialog = document.getElementById("settings-dialog");
     if (settingsDialog) {
         settingsDialog.addEventListener("cancel", (e) => {
@@ -10489,6 +10492,168 @@ function handleYouTubeSearchMenu(action) {
     if (back && typeof back.focus === "function") back.focus();
 }
 
+// --- Auto-downloads (downloads.js + api/_lib/downloads.js) ---
+// A YouTube song that starts playing, and the next one in Up Next, are saved to ./downloads as
+// "Artist - Title [id].m4a". Saved songs join the Library, play from disk, and get a ↓ mark.
+
+let autoDownloader = null;
+
+function getDownloadsModule() {
+    return (typeof window !== "undefined" && window.SpotTubeDownloads) || null;
+}
+
+function getDownloadSettings() {
+    const DL = getDownloadsModule();
+    const store = getStorage();
+    const prefs = store && typeof store.getPreferences === "function" ? store.getPreferences() : {};
+    return DL ? DL.normalizeSettings(prefs.autoDownload) : { enabled: false, maxGB: 5, minFreeGB: 10 };
+}
+
+function setDownloadSettings(patch) {
+    const DL = getDownloadsModule();
+    const store = getStorage();
+    if (!DL || !store || typeof store.setPreferences !== "function") return getDownloadSettings();
+    const next = DL.normalizeSettings({ ...getDownloadSettings(), ...patch });
+    store.setPreferences({ autoDownload: next });
+    renderDownloadSettings();
+    return next;
+}
+
+/** Marks a saved song and keeps it in the Library (a song heard only in a YouTube mix becomes a library video). */
+function markTrackDownloaded(track, info) {
+    if (!track) return;
+    track.downloaded = true;
+    if (track.ytEphemeral || !getAddedYouTubeIds().includes(track.youtubeId)) {
+        addYouTubeVideo(track.youtubeId, {
+            skipRefresh: true,
+            info: info || { title: track.title, artist: track.artistDisplay, channel: track.channel || track.artistDisplay, duration: track.duration },
+        });
+    }
+}
+
+/** Songs already on disk (maybe from another browser) join the Library on startup. */
+function syncDownloadedSongs(status) {
+    if (!status || !status.available) return;
+    let changed = false;
+    for (const song of status.songs || []) {
+        let track = songs.find((t) => t.source === "youtube" && t.youtubeId === song.id);
+        if (!track) {
+            const r = addYouTubeVideo(song.id, { skipRefresh: true, info: { title: song.title, artist: song.artist, channel: song.artist, duration: 0 } });
+            track = r.track;
+        }
+        if (track && !track.downloaded) {
+            markTrackDownloaded(track);
+            changed = true;
+        }
+    }
+    if (changed) {
+        refreshLibraryViews();
+        updateYouTubeCount();
+    }
+}
+
+function initAutoDownloads() {
+    const DL = getDownloadsModule();
+    if (!DL || autoDownloader) return autoDownloader;
+    let skipNoticeShown = false;
+    autoDownloader = DL.createAutoDownloader({
+        getCurrentTrack: () => songs[currentTrackIndex],
+        getNextTrack: () => getUpcomingQueueTracks()[0],
+        getSettings: getDownloadSettings,
+        onSaved: (track) => {
+            const wasMarked = track.downloaded;
+            markTrackDownloaded(track);
+            if (!wasMarked) {
+                refreshLibraryViews({ skipShelves: true });
+                updateYouTubeCount();
+            }
+            renderDownloadSettings({ refresh: true });
+        },
+        onSkipped: (track, reason) => {
+            renderDownloadSettings({ refresh: true });
+            if (skipNoticeShown) return;
+            skipNoticeShown = true;
+            const why = reason === "DISK_FULL" ? "your disk is nearly full" : "the downloads folder reached its size limit";
+            console.info(`[downloads] Paused: ${why}. Change the limits in Settings.`);
+        },
+    });
+    autoDownloader.attach(document);
+    autoDownloader.refresh().then((status) => {
+        syncDownloadedSongs(status);
+        renderDownloadSettings();
+    });
+    return autoDownloader;
+}
+
+/** Fills the Settings → Downloads section from the saved settings and the server's disk numbers. */
+async function renderDownloadSettings(options = {}) {
+    const DL = getDownloadsModule();
+    const section = document.getElementById("settings-downloads");
+    if (!DL || !section) return;
+    const settings = getDownloadSettings();
+    const status = options.refresh && autoDownloader ? await autoDownloader.refresh() : (autoDownloader && autoDownloader.getStatus()) || null;
+    const available = Boolean(status && status.available);
+
+    const toggle = document.getElementById("setting-auto-download");
+    const state = document.getElementById("setting-auto-download-state");
+    if (toggle) {
+        toggle.checked = settings.enabled;
+        toggle.setAttribute("aria-checked", String(settings.enabled));
+        toggle.disabled = !available;
+    }
+    if (state) state.textContent = settings.enabled ? "On" : "Off";
+
+    const totalGB = status && status.totalBytes ? Math.floor(status.totalBytes / DL.GB) : DL.LIMITS.maxGB[1];
+    const sliders = [
+        ["setting-download-max", "setting-download-max-value", settings.maxGB],
+        ["setting-download-free", "setting-download-free-value", settings.minFreeGB],
+    ];
+    for (const [inputId, valueId, value] of sliders) {
+        const input = document.getElementById(inputId);
+        const out = document.getElementById(valueId);
+        if (input) {
+            input.max = String(Math.max(Number(input.min) || 1, Math.min(DL.LIMITS.maxGB[1], totalGB)));
+            input.value = String(value);
+            input.disabled = !available || !settings.enabled;
+            input.setAttribute("aria-valuetext", `${value} GB`);
+        }
+        if (out) out.textContent = `${value} GB`;
+    }
+
+    const usage = document.getElementById("setting-download-usage");
+    const bar = document.getElementById("setting-download-bar");
+    if (usage) {
+        if (!status) usage.textContent = "Checking the downloads folder…";
+        else if (!available) usage.textContent = "Downloads only work when the app runs on your computer (npm start).";
+        else {
+            const n = status.count || 0;
+            const free = status.freeBytes != null ? ` · ${DL.formatBytes(status.freeBytes)} free on disk` : "";
+            usage.textContent = `${DL.formatBytes(status.usedBytes)} of ${settings.maxGB} GB used · ${n} ${n === 1 ? "song" : "songs"}${free}`;
+        }
+    }
+    if (bar) {
+        const pct = available ? Math.min(100, ((status.usedBytes || 0) / (settings.maxGB * DL.GB)) * 100) : 0;
+        bar.style.width = `${pct.toFixed(1)}%`;
+        bar.parentElement && bar.parentElement.setAttribute("aria-valuenow", String(Math.round(pct)));
+    }
+}
+
+function initDownloadSettingsControls() {
+    const toggle = document.getElementById("setting-auto-download");
+    if (toggle) toggle.addEventListener("change", () => setDownloadSettings({ enabled: Boolean(toggle.checked) }));
+    const bind = (id, key) => {
+        const input = document.getElementById(id);
+        if (!input) return;
+        const out = document.getElementById(`${id}-value`);
+        input.addEventListener("input", () => {
+            if (out) out.textContent = `${input.value} GB`; // live label while dragging
+        });
+        input.addEventListener("change", () => setDownloadSettings({ [key]: Number(input.value) }));
+    };
+    bind("setting-download-max", "maxGB");
+    bind("setting-download-free", "minFreeGB");
+}
+
 // --- YouTube Music radio mixes ("Start mix" from a search result or any YouTube track) ---
 
 const ytMix = { token: 0, mixId: null, loading: false, extendedFrom: new Set() };
@@ -11034,6 +11199,10 @@ window.SpotTubeShell = {
     checkYouTubeApi,
     addYouTubeVideo,
     addAllYouTubeVideos,
+    initAutoDownloads,
+    getDownloadSettings,
+    setDownloadSettings,
+    getAutoDownloader: () => autoDownloader,
     removeYouTubeVideo,
     openYouTubeDetail,
     submitYouTubeAddForm,

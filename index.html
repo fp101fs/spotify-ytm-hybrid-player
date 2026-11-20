@@ -13,6 +13,7 @@
     <script src="player.js" defer></script>
     <script src="metadata-lookup.js" defer></script>
 <script src="youtube.js" defer></script>
+    <script src="downloads.js" defer></script>
     <script src="visualizer.js" defer></script>
     <script src="script.js" defer></script>
 </head>
@@ -1058,6 +1059,32 @@
                         </ul>
                         <p>Covers then load from <strong>Cover Art Archive</strong> (coverartarchive.org) or Apple. Your audio files never leave this device, and no account or key is used. Close matches only fill in info the file was missing; anything less certain waits for you to review. Results are saved in this browser so each song is looked up once.</p>
                     </div>
+                </section>
+                <section class="settings-section" id="settings-downloads" aria-labelledby="settings-downloads-heading">
+                    <h3 class="settings-section-title" id="settings-downloads-heading">Downloads</h3>
+                    <div class="settings-row">
+                        <label class="settings-switch" for="setting-auto-download">
+                            <span class="settings-switch-text">Auto-download songs as they play</span>
+                            <input type="checkbox" role="switch" id="setting-auto-download" aria-checked="true" aria-describedby="setting-auto-download-desc">
+                            <span class="settings-switch-track" aria-hidden="true"><span class="settings-switch-thumb"></span></span>
+                            <span class="settings-switch-state" id="setting-auto-download-state" aria-hidden="true">On</span>
+                        </label>
+                    </div>
+                    <div class="settings-desc" id="setting-auto-download-desc">
+                        <p>When a YouTube song starts playing, it and the next song are saved to the <strong>downloads</strong> folder as <strong>Artist - Title [id].m4a</strong>. Saved songs show up in your Library, start instantly and play offline. A song that's already saved isn't downloaded again.</p>
+                    </div>
+                    <div class="settings-slider">
+                        <label for="setting-download-max">Space for downloads</label>
+                        <output id="setting-download-max-value" for="setting-download-max">5 GB</output>
+                        <input type="range" id="setting-download-max" min="1" max="500" step="1" value="5">
+                    </div>
+                    <div class="settings-slider">
+                        <label for="setting-download-free">Always keep free on disk</label>
+                        <output id="setting-download-free-value" for="setting-download-free">10 GB</output>
+                        <input type="range" id="setting-download-free" min="1" max="500" step="1" value="10">
+                    </div>
+                    <div class="settings-usage-bar" role="progressbar" aria-label="Downloads space used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="setting-download-bar"></span></div>
+                    <p class="settings-desc settings-usage" id="setting-download-usage" aria-live="polite">Checking the downloads folder…</p>
                 </section>
                 <div class="playlist-dialog-actions">
                     <button type="button" class="hero-primary-btn" id="settings-done-btn">Done</button>

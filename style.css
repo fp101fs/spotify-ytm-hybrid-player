@@ -4738,6 +4738,59 @@ span.detail-track-cover.import-shimmer {
     color: var(--text-primary);
 }
 
+/* Settings → Downloads */
+.settings-slider {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 6px 12px;
+    font-weight: 700;
+}
+
+.settings-slider output {
+    font-size: 0.85rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-secondary);
+}
+
+.settings-slider input[type="range"] {
+    grid-column: 1 / -1;
+    inline-size: 100%;
+    accent-color: var(--accent-spotify);
+    cursor: pointer;
+}
+
+.settings-slider input[type="range"]:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.settings-usage-bar {
+    block-size: 6px;
+    border-radius: var(--radius-pill);
+    background-color: #3a3a3a;
+    overflow: hidden;
+}
+
+.settings-usage-bar span {
+    display: block;
+    block-size: 100%;
+    width: 0;
+    background-color: var(--accent-spotify);
+    transition: width 0.3s ease;
+}
+
+.settings-usage {
+    margin: 0;
+}
+
+.lib-dl-badge {
+    display: inline-block;
+    margin-inline-end: 4px;
+    color: var(--accent-spotify);
+    font-weight: 700;
+}
+
 .match-review-progress {
     margin-inline-start: 6px;
     font-size: 0.9rem;

@@ -44,6 +44,13 @@ A static-first music player that mixes Spotify's 3-pane layout, Daily Mixes and 
   - Avoid the extension named "EditThisCookie": the original was removed from the Chrome Web Store, and the one now using that name is a reported credential-stealing copycat.
 - Only the added video IDs and their titles are saved in the browser. Thumbnails and the fallback player load from Google (`i.ytimg.com`, `youtube-nocookie.com`).
 
+## Auto-downloads
+
+- When a YouTube song starts playing (`npm start` only), it and the next song in Up Next are saved to `downloads/` as regular files: `Artist - Title [videoId].m4a`, tagged with artist and title when `ffmpeg` is installed. Files that already exist (matched by video ID) are skipped.
+- Saved songs join your Library with a ↓ mark, and their audio plays straight from disk: it starts instantly and works offline.
+- **Settings → Downloads** has an on/off switch and two sliders: **Space for downloads** (the most the folder may hold, default 5 GB) and **Always keep free on disk** (default 10 GB, never less than 1 GB). The server checks the real free space (`statfs`) before each download. When a limit would be crossed, new songs are skipped and nothing is deleted.
+- Set `SPOTTUBE_DOWNLOADS_DIR` to use another folder. Downloads are off on Vercel.
+
 ## Run locally
 
 Needs Node 22.22.2 or newer.
@@ -90,6 +97,7 @@ npm run test:yt        # optional live check against YouTube
 | `library.js` | local import, tag parsing, playlists |
 | `metadata-lookup.js` | optional MusicBrainz / Cover Art Archive / iTunes lookup |
 | `youtube.js` | YouTube link parsing, suggestions, tracks (browser + server) |
+| `downloads.js`, `api/_lib/downloads.js` | auto-downloads: playback trigger + Settings (browser), file saving and disk checks (server) |
 | `api/yt.js`, `api/_lib/` | `/api/yt` function: info, audio/video streams, captions, YouTube Music search/suggest, YouTube cookies (`yt-cookies.js`) |
 | `yt-allowlist.json` | suggested YouTube videos and their credits |
 | `scripts/dev-server.js` | local server for the app and `/api` |
