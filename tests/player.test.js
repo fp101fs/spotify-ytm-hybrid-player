@@ -717,3 +717,212 @@ test("crossfade never mutes incoming deck: lazy source binding, AudioContext res
     assert.equal(envThrow.deckB.volume, 1, "Incoming Deck B must reach full volume 1.0 even if onTrackChange throws");
     assert.equal(envThrow.deckB.muted, false);
 });
+
+test("silence-aware crossfade trims trailing silence early and cues standby deck past leading silence", async () => {
+    // 1. Pure RMS helper
+    assert.equal(SpotTubePlayer.computeRmsFromSamples(new Float32Array([0, 0, 0, 0])), 0);
+    assert.ok(SpotTubePlayer.computeRmsFromSamples(new Float32Array([0.5, -0.5, 0.5, -0.5])) === 0.5);
+    assert.equal(SpotTubePlayer.computeRmsFromSamples(new Uint8Array([128, 128, 128, 128])), 0);
+    assert.ok(SpotTubePlayer.computeRmsFromSamples(new Uint8Array([255, 1, 255, 1])) > 0.9);
+
+    // 2. Trailing silence triggers early crossfade only after audible signal + sustained hold inside outro window
+    let deckALevel = 0;
+    let deckBLevel = 0;
+    const deckGains = [];
+    class SignalAudioContext {
+        constructor() {
+            this.state = "running";
+            this.currentTime = 0;
+            this.destination = {};
+            this._analyserCount = 0;
+        }
+        resume() {
+            this.state = "running";
+            return Promise.resolve();
+        }
+        createGain() {
+            const g = { gain: { value: 1 }, connect() {} };
+            deckGains.push(g);
+            return g;
+        }
+        createAnalyser() {
+            const idx = this._analyserCount++;
+            return {
+                fftSize: 256,
+                smoothingTimeConstant: 0,
+                connect() {},
+                getFloatTimeDomainData(buf) {
+                    // idx 0 = deckAnalyserA, idx 1 = deckAnalyserB, idx 2 = shared post-gain analyser
+                    const amp = idx === 0 ? deckALevel : idx === 1 ? deckBLevel : 0;
+                    buf.fill(amp);
+                },
+            };
+        }
+        createMediaElementSource(el) {
+            return { mediaElement: el, connect() {} };
+        }
+    }
+
+    const env = createTestPlayerEnvironment({
+        crossfadeSeconds: 4,
+        volume: 0.15, // low master volume must not fool pre-gain analyser
+        AudioContext: SignalAudioContext,
+        trailingSilenceHoldMs: 80,
+    });
+    env.qm.startMix("espresso-sabrina-carpenter");
+    const first = env.qm.getCurrentTrack();
+    env.player.loadAndPlayTrack(first, { autoplay: true });
+
+    // Even inside outro window, silence BEFORE any audible signal must not trigger early crossfade
+    deckALevel = 0;
+    assert.equal(env.player.evaluatePlaybackTick(170, 180).action, "none");
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(env.player.evaluatePlaybackTick(170.2, 180).action, "none");
+
+    // Track plays audible music, then pauses mid-song (outside outro window) -> must NOT trigger
+    deckALevel = 0.25;
+    assert.equal(env.player.evaluatePlaybackTick(60, 180).action, "none");
+    deckALevel = 0;
+    assert.equal(env.player.evaluatePlaybackTick(61, 180).action, "none");
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(env.player.evaluatePlaybackTick(61.5, 180).action, "none");
+
+    // Track enters outro window (10s remaining > 4s crossfade) and drops to silence for >= 80ms
+    assert.equal(env.player.evaluatePlaybackTick(170, 180).action, "none", "First silent tick starts hold timer");
+    await new Promise((r) => setTimeout(r, 100));
+    const earlyCf = env.player.evaluatePlaybackTick(170.2, 180);
+    assert.equal(earlyCf.action, "crossfade", "Sustained trailing silence in outro must trigger early crossfade");
+    assert.equal(earlyCf.reason, "trailing-silence");
+    assert.ok(earlyCf.fadeResult.durationSeconds <= 1.5, "Trailing-silence crossfade uses snappy fade-in");
+    env.player.cancelActiveCrossfade(true);
+
+    // 3. Leading silence cueing silently scans standby deck at gain 0 and parks at music start
+    let cueDeckALevel = 0.3;
+    let cueDeckBLevel = 0;
+    const cueGains = [];
+    class CueAudioContext {
+        constructor() {
+            this.state = "running";
+            this.currentTime = 0;
+            this.destination = {};
+            this._analyserCount = 0;
+        }
+        resume() { return Promise.resolve(); }
+        createGain() {
+            const g = { gain: { value: 1 }, connect() {} };
+            cueGains.push(g);
+            return g;
+        }
+        createAnalyser() {
+            const idx = this._analyserCount++;
+            return {
+                fftSize: 256,
+                smoothingTimeConstant: 0,
+                connect() {},
+                getFloatTimeDomainData(buf) {
+                    const amp = idx === 0 ? cueDeckALevel : idx === 1 ? cueDeckBLevel : 0;
+                    buf.fill(amp);
+                },
+            };
+        }
+        createMediaElementSource(el) {
+            return { mediaElement: el, connect() {} };
+        }
+    }
+
+    const deckA2 = createMockAudio("cueA");
+    const deckB2 = createMockAudio("cueB");
+    deckB2.readyState = 4;
+    deckB2.playbackRate = 1;
+    const envCue = createTestPlayerEnvironment({
+        primaryAudio: deckA2,
+        secondaryAudio: deckB2,
+        crossfadeSeconds: 4,
+        AudioContext: CueAudioContext,
+    });
+    envCue.qm.startMix("espresso-sabrina-carpenter");
+    const track1 = envCue.qm.getCurrentTrack();
+    const track2 = envCue.qm.getQueue()[0].track;
+    envCue.player.loadAndPlayTrack(track1, { autoplay: true });
+
+    // Enter standby cue lead window (12s remaining <= crossfade + 12)
+    envCue.player.evaluatePlaybackTick(168, 180);
+    assert.equal(deckB2.paused, false, "Standby Deck B starts silent cue scan");
+    assert.equal(deckB2.playbackRate, 4, "Standby cue scans at 4x speed");
+    assert.equal(cueGains[1].gain.value, 0, "Standby Deck B GainNode must be 0 during cue scan");
+
+    // Simulate Deck B advancing through 3.4s of silence then hitting audible music
+    deckB2.currentTime = 3.4;
+    cueDeckBLevel = 0.2;
+    await new Promise((r) => setTimeout(r, 90));
+
+    assert.equal(deckB2.paused, true, "Standby Deck B pauses once audible start is found");
+    assert.equal(deckB2.playbackRate, 1, "Standby Deck B restores playbackRate to 1");
+    const cuedAt = envCue.player.getLeadingCueSeconds(track2.id);
+    assert.ok(cuedAt !== null && Math.abs(cuedAt - 3.22) < 0.05, `Expected cue near 3.22s (got ${cuedAt})`);
+    assert.ok(Math.abs(deckB2.currentTime - cuedAt) < 0.05, "Standby Deck B parked at cued start");
+
+    // Starting crossfade must begin incoming Deck B at the cued offset (not 0)
+    envCue.player.beginCrossfade(track2, { durationSeconds: 4, manualStep: true });
+    assert.ok(Math.abs(deckB2.currentTime - cuedAt) < 0.05, "Crossfade enters incoming track at cued start");
+    envCue.player.cancelActiveCrossfade(true);
+
+    // Manual loadAndPlayTrack still starts from 0:00
+    envCue.player.loadAndPlayTrack(track2, { autoplay: true });
+    assert.equal(envCue.player.getActiveDeck().currentTime, 0, "Manual play starts track at 0:00");
+});
+
+test("incoming crossfade track stays at 0 gain while buffering and fades in smoothly once playing begins", async () => {
+    const deckA = createMockAudio("bufA");
+    const deckB = createMockAudio("bufB");
+    deckA.readyState = 4;
+    deckB.readyState = 1; // Still buffering / seeking when crossfade begins
+
+    const env = createTestPlayerEnvironment({
+        primaryAudio: deckA,
+        secondaryAudio: deckB,
+        crossfadeSeconds: 1,
+        AudioContext: null,
+    });
+    env.qm.startMix("espresso-sabrina-carpenter");
+    const t1 = env.qm.getCurrentTrack();
+    const t2 = env.qm.getQueue()[0].track;
+    env.player.loadAndPlayTrack(t1, { autoplay: true });
+
+    const incomingSamples = [];
+    env.player.onChange((_st, ev) => {
+        if (ev.type === "crossfade-step") {
+            incomingSamples.push({
+                outProg: ev.outgoingProgress,
+                inProg: ev.incomingProgress,
+                inGain: ev.incomingGain,
+            });
+        }
+    });
+
+    env.player.beginCrossfade(t2, { durationSeconds: 0.35 });
+    // Wait 200ms while deckB is STILL buffering (readyState = 1, no "playing" event yet)
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(deckB.volume, 0, "Buffering incoming deck must remain at 0 gain instead of jumping to 100%");
+    assert.ok(deckA.volume < 0.9, "Outgoing deck continues fading out while incoming buffers");
+
+    // Now deckB finishes buffering and begins playing
+    deckB.readyState = 4;
+    deckB.emit("playing");
+
+    // Shortly after playing starts (~100ms into 350ms fade-in), deckB must be softly fading in (not at 100%)
+    await new Promise((r) => setTimeout(r, 110));
+    assert.ok(
+        deckB.volume > 0.01 && deckB.volume < 0.75,
+        `Incoming deck must fade in smoothly after playing starts (got volume=${deckB.volume})`
+    );
+
+    // Wait for fade-in to complete
+    await new Promise((r) => setTimeout(r, 400));
+    assert.equal(env.player.getState().crossfadeState.active, false);
+    assert.equal(deckB.volume, 1, "Incoming deck reaches 100% only after its fade-in completes");
+    assert.ok(
+        incomingSamples.some((s) => s.inGain > 0 && s.inGain < 0.5),
+        "Fade-in curve must include smooth low-gain ramp steps"
+    );
+});

@@ -34,6 +34,22 @@
     const CROSSFADE_PRESETS = [0, 2, 4, 6, 8, 12];
     const DEFAULT_MIN_QUEUE_SIZE = 3;
 
+    // Silence-aware crossfade thresholds & guardrails
+    const SILENCE_RMS_THRESHOLD = 0.0056; // ~ -45 dBFS
+    const TRAILING_WATCH_WINDOW_SECONDS = 18;
+    const TRAILING_SILENCE_HOLD_MS = 500;
+    const TRAILING_SILENCE_FADE_CAP_SECONDS = 1.5;
+    const TRAILING_SILENCE_INCOMING_FADE_CAP_SECONDS = 4;
+    const INCOMING_FADE_IN_EXPONENT = 1.6;
+    const MAX_LEADING_TRIM_SECONDS = 10;
+    const LEADING_TRIM_MIN_SECONDS = 0.25;
+    // Slightly larger than one 4x * 35ms scan step (~0.14s) so the first transient is never clipped
+    const LEADING_TRIM_PREROLL_SECONDS = 0.18;
+    const LEADING_CUE_SCAN_RATE = 4;
+    const LEADING_CUE_POLL_MS = 35;
+    const LEADING_CUE_TIMEOUT_MS = 4000;
+    const LEADING_CUE_CACHE_LIMIT = 200;
+
     function clamp(value, min, max) {
         if (!Number.isFinite(value)) return min;
         return Math.max(min, Math.min(max, value));
@@ -42,6 +58,22 @@
     function roundTo(value, decimals = 4) {
         const factor = Math.pow(10, decimals);
         return Math.round((Number(value) || 0) * factor) / factor;
+    }
+
+    /**
+     * Computes RMS loudness from time-domain PCM samples:
+     * - Float32Array (or number array) in [-1, 1]
+     * - Uint8Array in [0, 255] centered at 128
+     */
+    function computeRmsFromSamples(samples) {
+        if (!samples || !samples.length) return 0;
+        const isByte = typeof Uint8Array !== "undefined" && samples instanceof Uint8Array;
+        let sumSq = 0;
+        for (let i = 0; i < samples.length; i++) {
+            const v = isByte ? (samples[i] - 128) / 128 : Number(samples[i]) || 0;
+            sumSq += v * v;
+        }
+        return Math.sqrt(sumSq / samples.length);
     }
 
     /**
@@ -58,6 +90,18 @@
             outgoingGain: roundTo(Math.cos(angle)),
             incomingGain: roundTo(Math.sin(angle)),
         };
+    }
+
+    /**
+     * Perceptually smooth fade-in gain for live crossfade playback.
+     * Softens the initial steep slope of sin(p * pi/2) so incoming tracks clearly ramp up
+     * instead of jumping loudly in the first few hundred milliseconds.
+     */
+    function computePerceptualFadeInGain(progress) {
+        const p = clamp(Number(progress) || 0, 0, 1);
+        if (p <= 0) return 0;
+        if (p >= 1) return 1;
+        return roundTo(Math.pow(Math.sin(p * Math.PI * 0.5), INCOMING_FADE_IN_EXPONENT));
     }
 
     function isEditableTarget(target) {
@@ -167,14 +211,24 @@
             toTrack: null,
             startedAt: 0,
             durationSeconds: 0,
+            incomingStartedAt: null,
+            incomingFadeDuration: 0,
+            incomingReady: false,
+            incomingStartTime: 0,
+            outgoingPaused: false,
+            outgoingGain: 0,
+            incomingGain: 0,
             progress: 0,
             timerId: null,
+            cleanupListeners: null,
         };
 
         // Web Audio API dual-deck graph state
         let audioCtx = null;
         let sourceNodeA = null;
         let sourceNodeB = null;
+        let deckAnalyserA = null;
+        let deckAnalyserB = null;
         let gainNodeA = null;
         let gainNodeB = null;
         let analyserNode = null;
@@ -182,6 +236,38 @@
         let webAudioSupported = false;
         const deckWebAudioBound = { A: false, B: false };
         let pendingCrossfadeTrackId = null;
+
+        // Silence-aware crossfade state (only active when crossfadeSeconds > 0)
+        const silenceOptions = {
+            enabled: options.trimSilence !== false,
+            rmsThreshold:
+                Number.isFinite(options.silenceRmsThreshold) && options.silenceRmsThreshold > 0
+                    ? options.silenceRmsThreshold
+                    : SILENCE_RMS_THRESHOLD,
+            trailingHoldMs:
+                Number.isFinite(options.trailingSilenceHoldMs) && options.trailingSilenceHoldMs >= 0
+                    ? options.trailingSilenceHoldMs
+                    : TRAILING_SILENCE_HOLD_MS,
+            maxLeadingTrimSeconds:
+                Number.isFinite(options.maxLeadingTrimSeconds) && options.maxLeadingTrimSeconds >= 0
+                    ? options.maxLeadingTrimSeconds
+                    : MAX_LEADING_TRIM_SECONDS,
+        };
+        let trailingSilenceState = {
+            trackId: null,
+            hadAudibleSignal: false,
+            silentSinceMs: null,
+        };
+        const leadingCueCache = new Map();
+        let standbyCueState = {
+            active: false,
+            deckKey: null,
+            trackId: null,
+            timerId: null,
+            startedAt: 0,
+        };
+        let analyserFloatBuf = null;
+        let analyserByteBuf = null;
 
         const listeners = new Set();
 
@@ -206,6 +292,266 @@
 
         function getDeckGainNode(deckKey) {
             return deckKey === "A" ? gainNodeA : gainNodeB;
+        }
+
+        function getDeckAnalyserNode(deckKey) {
+            return deckKey === "A" ? deckAnalyserA : deckAnalyserB;
+        }
+
+        function measureDeckRms(deckKey) {
+            if (!webAudioSupported || !deckWebAudioBound[deckKey]) return null;
+            const node = getDeckAnalyserNode(deckKey);
+            if (!node) return null;
+            const size = Math.max(64, Number(node.fftSize) || 256);
+
+            if (typeof node.getFloatTimeDomainData === "function") {
+                if (!analyserFloatBuf || analyserFloatBuf.length !== size) {
+                    analyserFloatBuf = new Float32Array(size);
+                } else {
+                    analyserFloatBuf.fill(0);
+                }
+                try {
+                    node.getFloatTimeDomainData(analyserFloatBuf);
+                    return computeRmsFromSamples(analyserFloatBuf);
+                } catch (_) {
+                    return null;
+                }
+            }
+            if (typeof node.getByteTimeDomainData === "function") {
+                if (!analyserByteBuf || analyserByteBuf.length !== size) {
+                    analyserByteBuf = new Uint8Array(size);
+                }
+                // Center at 128 so a no-op mock reads as 0 RMS rather than full-scale DC
+                analyserByteBuf.fill(128);
+                try {
+                    node.getByteTimeDomainData(analyserByteBuf);
+                    return computeRmsFromSamples(analyserByteBuf);
+                } catch (_) {
+                    return null;
+                }
+            }
+            return null;
+        }
+
+        function resetTrailingSilenceState(trackId = activeTrack ? activeTrack.id : null) {
+            trailingSilenceState = {
+                trackId: trackId || null,
+                hadAudibleSignal: false,
+                silentSinceMs: null,
+            };
+        }
+
+        function cacheLeadingCue(trackId, seconds) {
+            if (!trackId) return;
+            if (leadingCueCache.size >= LEADING_CUE_CACHE_LIMIT && !leadingCueCache.has(trackId)) {
+                const oldestKey = leadingCueCache.keys().next().value;
+                if (oldestKey !== undefined) leadingCueCache.delete(oldestKey);
+            }
+            leadingCueCache.set(trackId, Math.max(0, roundTo(seconds, 3)));
+        }
+
+        function getLeadingCueSeconds(trackOrId) {
+            const id = typeof trackOrId === "string" ? trackOrId : trackOrId && trackOrId.id;
+            if (!id || !leadingCueCache.has(id)) return null;
+            return leadingCueCache.get(id);
+        }
+
+        function stopStandbyCue({ pauseDeck = true, resetTime = false } = {}) {
+            if (standbyCueState.timerId && typeof clearInterval === "function") {
+                clearInterval(standbyCueState.timerId);
+            }
+            const cuedKey = standbyCueState.deckKey;
+            standbyCueState = {
+                active: false,
+                deckKey: null,
+                trackId: null,
+                timerId: null,
+                startedAt: 0,
+            };
+            if (cuedKey) {
+                const deck = cuedKey === "A" ? deckA : deckB;
+                try {
+                    deck.playbackRate = 1;
+                } catch (_) {}
+                if (pauseDeck) {
+                    try {
+                        deck.pause();
+                    } catch (_) {}
+                }
+                if (resetTime) {
+                    try {
+                        deck.currentTime = 0;
+                    } catch (_) {}
+                }
+            }
+        }
+
+        /**
+         * Silently scans past leading silence on the preloaded standby deck using its pre-gain
+         * AnalyserNode (while GainNode = 0 keeps it completely inaudible), parking it right where
+         * audible music begins so crossfade enters cleanly with zero dead air.
+         */
+        function maybeCueStandbyDeck(remainingSeconds) {
+            if (
+                !silenceOptions.enabled ||
+                silenceOptions.maxLeadingTrimSeconds <= 0 ||
+                crossfadeSeconds <= 0 ||
+                crossfadeState.active ||
+                standbyCueState.active ||
+                !preloadedTrack ||
+                !preloadedTrack.id ||
+                leadingCueCache.has(preloadedTrack.id)
+            ) {
+                return false;
+            }
+            if (remainingSeconds > crossfadeSeconds + 12) return false;
+
+            const standbyKey = activeDeckKey === "A" ? "B" : "A";
+            const standby = standbyKey === "A" ? deckA : deckB;
+            if (!standby || !isDeckLoadedWithUrl(standby, preloadedTrack.audioUrl)) return false;
+
+            // Require decoded audio metadata/frames ready and Web Audio graph support so
+            // gainNode = 0 guarantees complete silence while scanning
+            if (Number(standby.readyState) < 2) return false;
+            if (!initWebAudioGraph() || !ensureDeckWebAudioSource(standbyKey)) return false;
+            const standbyAnalyser = getDeckAnalyserNode(standbyKey);
+            if (!standbyAnalyser || typeof standbyAnalyser.getFloatTimeDomainData !== "function") {
+                return false;
+            }
+
+            const standbyDuration =
+                Number.isFinite(standby.duration) && standby.duration > 0
+                    ? standby.duration
+                    : Number(preloadedTrack.duration || 0);
+            if (standbyDuration > 0 && standbyDuration <= silenceOptions.maxLeadingTrimSeconds + crossfadeSeconds) {
+                cacheLeadingCue(preloadedTrack.id, 0);
+                return false;
+            }
+
+            const targetTrack = preloadedTrack;
+            applyDeckGain(standbyKey, 0);
+            try {
+                standby.currentTime = 0;
+                standby.playbackRate = LEADING_CUE_SCAN_RATE;
+            } catch (_) {}
+
+            standbyCueState = {
+                active: true,
+                deckKey: standbyKey,
+                trackId: targetTrack.id,
+                timerId: null,
+                startedAt: Date.now(),
+            };
+
+            const finishCue = (cueSeconds) => {
+                if (!standbyCueState.active || standbyCueState.trackId !== targetTrack.id) return;
+                cacheLeadingCue(targetTrack.id, cueSeconds);
+                stopStandbyCue({ pauseDeck: true, resetTime: false });
+                try {
+                    standby.currentTime = cueSeconds;
+                } catch (_) {}
+                emit("standby-cued", {
+                    track: targetTrack,
+                    standbyDeck: standbyKey,
+                    cueSeconds,
+                });
+            };
+
+            const playPromise = standby.play();
+            if (playPromise && typeof playPromise.catch === "function") {
+                playPromise.catch(() => {
+                    if (standbyCueState.active && standbyCueState.trackId === targetTrack.id) {
+                        stopStandbyCue({ pauseDeck: true, resetTime: true });
+                    }
+                });
+            }
+
+            if (typeof setInterval === "function") {
+                standbyCueState.timerId = setInterval(() => {
+                    if (
+                        !standbyCueState.active ||
+                        crossfadeState.active ||
+                        activeDeckKey === standbyKey ||
+                        standbyCueState.trackId !== targetTrack.id
+                    ) {
+                        stopStandbyCue({ pauseDeck: activeDeckKey !== standbyKey, resetTime: false });
+                        return;
+                    }
+
+                    const rms = measureDeckRms(standbyKey);
+                    const pos = Number(standby.currentTime || 0);
+                    const elapsedMs = Date.now() - standbyCueState.startedAt;
+
+                    if (rms !== null && rms >= silenceOptions.rmsThreshold) {
+                        const rawCue = Math.max(0, pos - LEADING_TRIM_PREROLL_SECONDS);
+                        const cueSeconds =
+                            rawCue >= LEADING_TRIM_MIN_SECONDS
+                                ? Math.min(rawCue, silenceOptions.maxLeadingTrimSeconds)
+                                : 0;
+                        finishCue(cueSeconds);
+                        return;
+                    }
+
+                    if (
+                        pos >= silenceOptions.maxLeadingTrimSeconds ||
+                        elapsedMs >= LEADING_CUE_TIMEOUT_MS ||
+                        standby.ended
+                    ) {
+                        // Track exceeded leading silence cap (e.g. quiet ambient intro): keep 0:00
+                        finishCue(0);
+                    }
+                }, LEADING_CUE_POLL_MS);
+                if (standbyCueState.timerId && typeof standbyCueState.timerId.unref === "function") {
+                    standbyCueState.timerId.unref();
+                }
+            }
+            return true;
+        }
+
+        /**
+         * Evaluates pre-gain RMS on the active deck to detect sustained trailing silence in the
+         * final watch window of a track when crossfade is active.
+         */
+        function shouldTriggerTrailingSilenceCrossfade(remainingSeconds, duration, nowMs = Date.now()) {
+            if (!silenceOptions.enabled || crossfadeSeconds <= 0) return false;
+            const trackId = activeTrack ? activeTrack.id : null;
+            if (trailingSilenceState.trackId !== trackId) {
+                resetTrailingSilenceState(trackId);
+            }
+
+            const watchWindow = Math.min(
+                TRAILING_WATCH_WINDOW_SECONDS,
+                Math.max(crossfadeSeconds + 10, crossfadeSeconds * 2),
+                duration * 0.45
+            );
+            // Once we know this track has audible signal, skip analyser polling until the outro window
+            if (trailingSilenceState.hadAudibleSignal && remainingSeconds > watchWindow) {
+                trailingSilenceState.silentSinceMs = null;
+                return false;
+            }
+
+            const rms = measureDeckRms(activeDeckKey);
+            if (rms === null) return false;
+
+            if (rms >= silenceOptions.rmsThreshold) {
+                trailingSilenceState.hadAudibleSignal = true;
+                trailingSilenceState.silentSinceMs = null;
+                return false;
+            }
+
+            // Never fire early before the track has actually produced audible signal
+            if (!trailingSilenceState.hadAudibleSignal) return false;
+
+            if (remainingSeconds > watchWindow || remainingSeconds <= 0) {
+                trailingSilenceState.silentSinceMs = null;
+                return false;
+            }
+
+            if (trailingSilenceState.silentSinceMs === null) {
+                trailingSilenceState.silentSinceMs = nowMs;
+                return false;
+            }
+            return nowMs - trailingSilenceState.silentSinceMs >= silenceOptions.trailingHoldMs;
         }
 
         function resolveAbsoluteUrl(url) {
@@ -280,12 +626,21 @@
 
             try {
                 audioCtx = new AudioCtx();
+                deckAnalyserA = audioCtx.createAnalyser();
+                deckAnalyserB = audioCtx.createAnalyser();
+                deckAnalyserA.fftSize = 256;
+                deckAnalyserB.fftSize = 256;
+                deckAnalyserA.smoothingTimeConstant = 0;
+                deckAnalyserB.smoothingTimeConstant = 0;
+
                 gainNodeA = audioCtx.createGain();
                 gainNodeB = audioCtx.createGain();
                 analyserNode = audioCtx.createAnalyser();
                 analyserNode.fftSize = 512;
                 analyserNode.smoothingTimeConstant = 0.8;
 
+                deckAnalyserA.connect(gainNodeA);
+                deckAnalyserB.connect(gainNodeB);
                 gainNodeA.connect(analyserNode);
                 gainNodeB.connect(analyserNode);
                 analyserNode.connect(audioCtx.destination);
@@ -299,21 +654,26 @@
         }
 
         /**
-         * Lazily binds a deck's HTMLAudioElement to its Web Audio GainNode only after the deck
-         * has a source URL loaded, keeping a strong reference to the MediaElementAudioSourceNode
-         * so it cannot be garbage-collected while idle.
+         * Lazily binds a deck's HTMLAudioElement to its Web Audio pre-gain AnalyserNode -> GainNode
+         * only after the deck has a source URL loaded, keeping a strong reference to the
+         * MediaElementAudioSourceNode so it cannot be garbage-collected while idle.
          */
         function ensureDeckWebAudioSource(deckKey) {
             if (!webAudioSupported || !audioCtx) return false;
             if (deckWebAudioBound[deckKey]) return true;
 
             const deck = deckKey === "A" ? deckA : deckB;
+            const deckAnalyser = getDeckAnalyserNode(deckKey);
             const gainNode = getDeckGainNode(deckKey);
             if (!deck || !deck.src || !gainNode) return false;
 
             try {
                 const source = audioCtx.createMediaElementSource(deck);
-                source.connect(gainNode);
+                if (deckAnalyser) {
+                    source.connect(deckAnalyser);
+                } else {
+                    source.connect(gainNode);
+                }
                 if (deckKey === "A") sourceNodeA = source;
                 else sourceNodeB = source;
                 deckWebAudioBound[deckKey] = true;
@@ -325,7 +685,7 @@
             }
         }
 
-        function applyDeckGain(deckKey, gainMultiplier = 1) {
+        function applyDeckGain(deckKey, gainMultiplier = 1, optionsGain = {}) {
             const deck = deckKey === "A" ? deckA : deckB;
             const clampedGain = clamp(gainMultiplier, 0, 1);
             const effectiveVolume = isMuted ? 0 : roundTo(clamp(masterVolume * clampedGain, 0, 1));
@@ -339,16 +699,30 @@
                 deck.volume = 1;
                 const gainNode = getDeckGainNode(deckKey);
                 if (gainNode && gainNode.gain) {
+                    const param = gainNode.gain;
+                    const rampSeconds = Number(optionsGain.rampSeconds) || 0;
                     if (
-                        typeof gainNode.gain.cancelScheduledValues === "function" &&
+                        typeof param.cancelScheduledValues === "function" &&
+                        typeof param.setValueAtTime === "function" &&
                         audioCtx &&
                         Number.isFinite(audioCtx.currentTime)
                     ) {
                         try {
-                            gainNode.gain.cancelScheduledValues(audioCtx.currentTime);
-                        } catch (_) {}
+                            const now = audioCtx.currentTime;
+                            param.cancelScheduledValues(now);
+                            if (rampSeconds > 0 && typeof param.linearRampToValueAtTime === "function") {
+                                param.setValueAtTime(Number.isFinite(param.value) ? param.value : 0, now);
+                                param.linearRampToValueAtTime(effectiveVolume, now + rampSeconds);
+                            } else {
+                                param.setValueAtTime(effectiveVolume, now);
+                                param.value = effectiveVolume;
+                            }
+                        } catch (_) {
+                            param.value = effectiveVolume;
+                        }
+                    } else {
+                        param.value = effectiveVolume;
                     }
-                    gainNode.gain.value = effectiveVolume;
                 }
             } else {
                 deck.muted = isMuted;
@@ -431,6 +805,7 @@
 
             const standby = getStandbyDeck();
             if (setDeckSource(standby, nextTrack)) {
+                stopStandbyCue({ pauseDeck: true, resetTime: false });
                 standby.currentTime = 0;
                 if (typeof standby.load === "function") {
                     try {
@@ -443,9 +818,37 @@
             return nextTrack;
         }
 
+        function makeIdleCrossfadeState(progress = 0) {
+            return {
+                active: false,
+                fromDeckKey: null,
+                toDeckKey: null,
+                fromTrack: null,
+                toTrack: null,
+                startedAt: 0,
+                durationSeconds: 0,
+                incomingStartedAt: null,
+                incomingFadeDuration: 0,
+                incomingReady: false,
+                incomingStartTime: 0,
+                outgoingPaused: false,
+                outgoingGain: 0,
+                incomingGain: 0,
+                progress,
+                timerId: null,
+                cleanupListeners: null,
+            };
+        }
+
         function cancelActiveCrossfade(resetOutgoing = true) {
+            stopStandbyCue({ pauseDeck: true, resetTime: false });
             if (crossfadeState.timerId && typeof clearInterval === "function") {
                 clearInterval(crossfadeState.timerId);
+            }
+            if (typeof crossfadeState.cleanupListeners === "function") {
+                try {
+                    crossfadeState.cleanupListeners();
+                } catch (_) {}
             }
             if (crossfadeState.active && resetOutgoing && crossfadeState.fromDeckKey) {
                 const outgoingDeck = crossfadeState.fromDeckKey === "A" ? deckA : deckB;
@@ -455,17 +858,7 @@
                 } catch (_) {}
                 applyDeckGain(crossfadeState.fromDeckKey, 0);
             }
-            crossfadeState = {
-                active: false,
-                fromDeckKey: null,
-                toDeckKey: null,
-                fromTrack: null,
-                toTrack: null,
-                startedAt: 0,
-                durationSeconds: 0,
-                progress: 0,
-                timerId: null,
-            };
+            crossfadeState = makeIdleCrossfadeState(0);
             applyDeckGain(activeDeckKey, 1);
         }
 
@@ -477,6 +870,8 @@
             if (!crossfadeState.active) return null;
             const gains = computeCrossfadeGains(progress);
             crossfadeState.progress = gains.progress;
+            crossfadeState.outgoingGain = gains.outgoingGain;
+            crossfadeState.incomingGain = gains.incomingGain;
 
             applyDeckGain(crossfadeState.fromDeckKey, gains.outgoingGain);
             applyDeckGain(crossfadeState.toDeckKey, gains.incomingGain);
@@ -509,6 +904,11 @@
             if (crossfadeState.timerId && typeof clearInterval === "function") {
                 clearInterval(crossfadeState.timerId);
             }
+            if (typeof crossfadeState.cleanupListeners === "function") {
+                try {
+                    crossfadeState.cleanupListeners();
+                } catch (_) {}
+            }
 
             const outgoingDeck = finishedFromKey === "A" ? deckA : deckB;
             try {
@@ -522,17 +922,7 @@
             activeDeckKey = finishedToKey;
             activeTrack = incomingTrack;
 
-            crossfadeState = {
-                active: false,
-                fromDeckKey: null,
-                toDeckKey: null,
-                fromTrack: null,
-                toTrack: null,
-                startedAt: 0,
-                durationSeconds: 0,
-                progress: 1,
-                timerId: null,
-            };
+            crossfadeState = makeIdleCrossfadeState(1);
 
             ensureEndlessQueue();
             emit("crossfade-complete", {
@@ -575,6 +965,11 @@
                 MIN_CROSSFADE_SECONDS,
                 MAX_CROSSFADE_SECONDS
             );
+            const incomingFadeDuration = clamp(
+                Number(optionsOverride.incomingDurationSeconds ?? fadeDuration),
+                MIN_CROSSFADE_SECONDS,
+                MAX_CROSSFADE_SECONDS
+            );
 
             // If crossfade is 0s, perform an immediate gapless deck switch
             if (fadeDuration <= 0) {
@@ -595,10 +990,25 @@
             const incomingDeck = toKey === "A" ? deckA : deckB;
             const outgoingTrack = activeTrack;
 
+            // Stop any active standby cue scan cleanly and restore normal playback rate
+            const wasMidCueForThisTrack =
+                standbyCueState.active &&
+                standbyCueState.deckKey === toKey &&
+                standbyCueState.trackId === nextTrack.id;
+            stopStandbyCue({ pauseDeck: false, resetTime: false });
+
             const srcChanged = setDeckSource(incomingDeck, nextTrack);
-            if (srcChanged || Number(incomingDeck.currentTime || 0) !== 0) {
-                incomingDeck.currentTime = 0;
+            const cachedCue = getLeadingCueSeconds(nextTrack);
+            const targetStart =
+                cachedCue !== null
+                    ? cachedCue
+                    : wasMidCueForThisTrack && !srcChanged
+                      ? clamp(Number(incomingDeck.currentTime || 0), 0, silenceOptions.maxLeadingTrimSeconds)
+                      : 0;
+            if (srcChanged || Math.abs(Number(incomingDeck.currentTime || 0) - targetStart) > 0.15) {
+                incomingDeck.currentTime = targetStart;
             }
+            resetTrailingSilenceState(nextTrack.id);
 
             // Initialize Web Audio after incomingDeck.src is set so createMediaElementSource
             // is never bound to an empty-src deck, and resume a suspended AudioContext.
@@ -625,20 +1035,50 @@
             activeTrack = nextTrack;
             preloadedTrack = null;
 
+            // On real browsers (where HTMLMediaElement.readyState is defined), wait until the
+            // incoming deck actually begins playing audio before starting its fade-in clock.
+            // Otherwise, buffering/seeking latency consumes the fade window and the incoming track
+            // slams in at 100% volume as soon as its first audio frames arrive.
+            const hasMediaReadyState = Number.isFinite(Number(incomingDeck.readyState));
+            const nowMs = Date.now();
             crossfadeState = {
                 active: true,
                 fromDeckKey: fromKey,
                 toDeckKey: toKey,
                 fromTrack: outgoingTrack,
                 toTrack: nextTrack,
-                startedAt: Date.now(),
+                startedAt: nowMs,
                 durationSeconds: fadeDuration,
+                incomingStartedAt: hasMediaReadyState ? null : nowMs,
+                incomingFadeDuration: incomingFadeDuration > 0 ? incomingFadeDuration : fadeDuration,
+                incomingReady: !hasMediaReadyState,
+                incomingStartTime: Number(incomingDeck.currentTime || targetStart || 0),
+                outgoingPaused: false,
+                outgoingGain: 1,
+                incomingGain: 0,
                 progress: 0,
                 timerId: null,
+                cleanupListeners: null,
             };
 
             applyDeckGain(fromKey, 1);
             applyDeckGain(toKey, 0);
+
+            if (hasMediaReadyState && typeof incomingDeck.addEventListener === "function") {
+                const markIncomingPlaying = () => {
+                    if (!crossfadeState.active || crossfadeState.toDeckKey !== toKey) return;
+                    if (!crossfadeState.incomingReady) {
+                        crossfadeState.incomingReady = true;
+                        crossfadeState.incomingStartedAt = Date.now();
+                    }
+                };
+                incomingDeck.addEventListener("playing", markIncomingPlaying);
+                crossfadeState.cleanupListeners = () => {
+                    if (typeof incomingDeck.removeEventListener === "function") {
+                        incomingDeck.removeEventListener("playing", markIncomingPlaying);
+                    }
+                };
+            }
 
             if (storage && typeof storage.recordPlayStart === "function") {
                 storage.recordPlayStart(nextTrack.id);
@@ -671,11 +1111,81 @@
             // exception in a UI callback can never leave the incoming deck stranded at gain 0.
             if (!optionsOverride.manualStep && typeof setInterval === "function") {
                 const stepIntervalMs = 50;
+                const rampSec = 0.045;
+                const stallTimeoutSec = Math.max(fadeDuration * 2, 8);
                 crossfadeState.timerId = setInterval(() => {
                     if (!crossfadeState.active) return;
-                    const elapsedSeconds = (Date.now() - crossfadeState.startedAt) / 1000;
-                    const progress = clamp(elapsedSeconds / fadeDuration, 0, 1);
-                    stepCrossfade(progress);
+                    const tickNow = Date.now();
+                    const outgoingElapsed = (tickNow - crossfadeState.startedAt) / 1000;
+                    const outgoingProgress = clamp(outgoingElapsed / fadeDuration, 0, 1);
+
+                    // Latch incoming fade-in start once audio frames are actually advancing
+                    if (
+                        !crossfadeState.incomingReady &&
+                        !incomingDeck.paused &&
+                        !incomingDeck.seeking &&
+                        Number(incomingDeck.readyState) >= 3 &&
+                        Number(incomingDeck.currentTime || 0) > crossfadeState.incomingStartTime + 0.01
+                    ) {
+                        crossfadeState.incomingReady = true;
+                        crossfadeState.incomingStartedAt = tickNow;
+                    }
+
+                    // Safety valve if incoming deck stalls indefinitely: finish cleanly rather than hanging
+                    if (!crossfadeState.incomingReady && outgoingElapsed >= stallTimeoutSec) {
+                        completeCrossfade();
+                        return;
+                    }
+
+                    const incomingProgress = crossfadeState.incomingReady
+                        ? clamp(
+                              (tickNow - crossfadeState.incomingStartedAt) /
+                                  1000 /
+                                  crossfadeState.incomingFadeDuration,
+                              0,
+                              1
+                          )
+                        : 0;
+
+                    const outgoingGain = computeCrossfadeGains(outgoingProgress).outgoingGain;
+                    const incomingGain = computePerceptualFadeInGain(incomingProgress);
+
+                    crossfadeState.outgoingGain = outgoingGain;
+                    crossfadeState.incomingGain = incomingGain;
+                    crossfadeState.progress = roundTo(Math.min(outgoingProgress, incomingProgress));
+
+                    if (outgoingProgress >= 1 && !crossfadeState.outgoingPaused) {
+                        crossfadeState.outgoingPaused = true;
+                        try {
+                            outgoingDeck.pause();
+                            outgoingDeck.currentTime = 0;
+                        } catch (_) {}
+                        applyDeckGain(crossfadeState.fromDeckKey, 0);
+                    } else if (!crossfadeState.outgoingPaused) {
+                        applyDeckGain(crossfadeState.fromDeckKey, outgoingGain, { rampSeconds: rampSec });
+                    }
+
+                    if (incomingProgress === 0) {
+                        applyDeckGain(crossfadeState.toDeckKey, 0);
+                    } else {
+                        applyDeckGain(crossfadeState.toDeckKey, incomingGain, { rampSeconds: rampSec });
+                    }
+
+                    emit("crossfade-step", {
+                        progress: crossfadeState.progress,
+                        outgoingProgress: roundTo(outgoingProgress),
+                        incomingProgress: roundTo(incomingProgress),
+                        outgoingGain,
+                        incomingGain,
+                        fromTrack: crossfadeState.fromTrack,
+                        toTrack: crossfadeState.toTrack,
+                        fromDeck: crossfadeState.fromDeckKey,
+                        toDeck: crossfadeState.toDeckKey,
+                    });
+
+                    if (outgoingProgress >= 1 && incomingProgress >= 1) {
+                        completeCrossfade();
+                    }
                 }, stepIntervalMs);
                 if (
                     crossfadeState.timerId &&
@@ -760,6 +1270,7 @@
             const previousTrack = activeTrack;
             activeTrack = track;
             preloadedTrack = null;
+            resetTrailingSilenceState(track.id);
 
             const shouldPlay = playOptions.autoplay !== false && !playOptions.pause;
             if (shouldPlay) {
@@ -834,25 +1345,40 @@
                 return { action: "none", remainingSeconds };
             }
 
-            // Trigger crossfade when entering the [0, crossfadeSeconds] window at the end of a track
-            if (
-                crossfadeSeconds > 0 &&
-                remainingSeconds > 0 &&
-                remainingSeconds <= crossfadeSeconds &&
-                duration > crossfadeSeconds + 2 &&
-                !deck.paused
-            ) {
-                const nextTrack = pullNextTrackFromQueue();
-                if (nextTrack) {
-                    const fadeResult = beginCrossfade(nextTrack, {
-                        durationSeconds: Math.min(crossfadeSeconds, remainingSeconds),
-                    });
-                    return {
-                        action: "crossfade",
-                        remainingSeconds,
-                        nextTrack,
-                        fadeResult,
-                    };
+            // Trigger crossfade when entering the [0, crossfadeSeconds] window at the end of a track,
+            // or earlier if sustained trailing silence is detected in the final watch window.
+            if (crossfadeSeconds > 0 && remainingSeconds > 0 && !deck.paused) {
+                // Silently cue the preloaded standby deck past any leading silence before crossfade starts
+                maybeCueStandbyDeck(remainingSeconds);
+
+                const inStandardWindow =
+                    remainingSeconds <= crossfadeSeconds && duration > crossfadeSeconds + 2;
+                const trailingSilenceDetected =
+                    !inStandardWindow &&
+                    duration > crossfadeSeconds + 2 &&
+                    shouldTriggerTrailingSilenceCrossfade(remainingSeconds, duration);
+
+                if (inStandardWindow || trailingSilenceDetected) {
+                    const nextTrack = pullNextTrackFromQueue();
+                    if (nextTrack) {
+                        const targetFadeDuration = trailingSilenceDetected
+                            ? Math.min(crossfadeSeconds, remainingSeconds, TRAILING_SILENCE_FADE_CAP_SECONDS)
+                            : Math.min(crossfadeSeconds, remainingSeconds);
+                        const incomingFadeDuration = trailingSilenceDetected
+                            ? Math.min(crossfadeSeconds, TRAILING_SILENCE_INCOMING_FADE_CAP_SECONDS)
+                            : targetFadeDuration;
+                        const fadeResult = beginCrossfade(nextTrack, {
+                            durationSeconds: targetFadeDuration,
+                            incomingDurationSeconds: incomingFadeDuration,
+                        });
+                        return {
+                            action: "crossfade",
+                            reason: trailingSilenceDetected ? "trailing-silence" : "window",
+                            remainingSeconds,
+                            nextTrack,
+                            fadeResult,
+                        };
+                    }
                 }
             }
 
@@ -948,6 +1474,7 @@
 
         function pause() {
             cancelActiveCrossfade(true);
+            trailingSilenceState.silentSinceMs = null;
             const deck = getActiveDeck();
             try {
                 deck.pause();
@@ -979,6 +1506,7 @@
                     ? clamp(Number(targetSeconds) || 0, 0, duration)
                     : Math.max(0, Number(targetSeconds) || 0);
             deck.currentTime = clampedTime;
+            trailingSilenceState.silentSinceMs = null;
             updateMediaSessionPosition(clampedTime, duration);
             emit("seek", { currentTime: clampedTime, duration });
             return clampedTime;
@@ -998,9 +1526,8 @@
                 isMuted = true;
             }
             if (crossfadeState.active) {
-                const gains = computeCrossfadeGains(crossfadeState.progress);
-                applyDeckGain(crossfadeState.fromDeckKey, gains.outgoingGain);
-                applyDeckGain(crossfadeState.toDeckKey, gains.incomingGain);
+                applyDeckGain(crossfadeState.fromDeckKey, crossfadeState.outgoingGain);
+                applyDeckGain(crossfadeState.toDeckKey, crossfadeState.incomingGain);
             } else {
                 applyDeckGain(activeDeckKey, 1);
             }
@@ -1019,9 +1546,8 @@
                 masterVolume = lastUnmutedVolume || 0.8;
             }
             if (crossfadeState.active) {
-                const gains = computeCrossfadeGains(crossfadeState.progress);
-                applyDeckGain(crossfadeState.fromDeckKey, gains.outgoingGain);
-                applyDeckGain(crossfadeState.toDeckKey, gains.incomingGain);
+                applyDeckGain(crossfadeState.fromDeckKey, crossfadeState.outgoingGain);
+                applyDeckGain(crossfadeState.toDeckKey, crossfadeState.incomingGain);
             } else {
                 applyDeckGain(activeDeckKey, 1);
             }
@@ -1432,7 +1958,11 @@
                 activeTrack,
                 preloadedTrack,
                 crossfadeSeconds,
-                crossfadeState: { ...crossfadeState, timerId: Boolean(crossfadeState.timerId) },
+                crossfadeState: {
+                    ...crossfadeState,
+                    timerId: Boolean(crossfadeState.timerId),
+                    cleanupListeners: undefined,
+                },
                 volume: masterVolume,
                 muted: isMuted,
                 shuffle: isShuffle,
@@ -1456,7 +1986,12 @@
             MIN_CROSSFADE_SECONDS,
             MAX_CROSSFADE_SECONDS,
             CROSSFADE_PRESETS,
+            SILENCE_RMS_THRESHOLD,
+            TRAILING_SILENCE_HOLD_MS,
+            MAX_LEADING_TRIM_SECONDS,
             computeCrossfadeGains,
+            computeRmsFromSamples,
+            getLeadingCueSeconds,
             getActiveDeck,
             getStandbyDeck,
             getDecks: () => ({ deckA, deckB, activeDeckKey }),
@@ -1500,7 +2035,11 @@
         MAX_CROSSFADE_SECONDS,
         CROSSFADE_PRESETS,
         DEFAULT_MIN_QUEUE_SIZE,
+        SILENCE_RMS_THRESHOLD,
+        TRAILING_SILENCE_HOLD_MS,
+        MAX_LEADING_TRIM_SECONDS,
         computeCrossfadeGains,
+        computeRmsFromSamples,
         isEditableTarget,
         createPlayerEngine,
         ...defaultPlayer,

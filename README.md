@@ -12,7 +12,7 @@ A static-first music player that mixes Spotify's 3-pane layout, Daily Mixes and 
 - **Start Mix anywhere**: endless radio from a track, artist, album, mood chip, playlist or search query.
 - **Mix tuning chips**: All, Familiar, Discover, Deep Cuts, Upbeat, Chill. Upcoming tracks re-rank without interrupting playback.
 - **Recommender**: artist and collaborator affinity, genre/album/era clustering, audio-feature similarity, your plays/likes/skips, and anti-repetition.
-- **Player**: dual-deck equal-power crossfade (0–12 s) with gapless standby preloading (Web Audio `GainNode` per deck with lazy source binding, and native HTML5 volume fallback on Safari/WebKit), automatic queue replenishment when fewer than 3 tracks are left, keyboard shortcuts (press `?`), MediaSession controls.
+- **Player**: dual-deck equal-power crossfade (0–12 s) with gapless standby preloading, automatic leading/trailing silence trimming when crossfade is active (via per-deck pre-gain Web Audio analysers, with native HTML5 volume fallback on Safari/WebKit), automatic queue replenishment when fewer than 3 tracks are left, keyboard shortcuts (press `?`), MediaSession controls.
 - **Home dashboard**: Your Supermix, Daily Mix 1–3, On Repeat, Rediscover, Jump Back In.
 - **Artist, album and song pages** with top tracks, discography and "Similar in Your Library".
 - **Omni-search** over songs, artists, albums, genres and moods, with a Top Result card and "Start Search Mix".
