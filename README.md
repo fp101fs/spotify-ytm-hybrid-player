@@ -63,6 +63,13 @@ npm start              # app + /api on http://127.0.0.1:5500 (PORT/HOST to chang
 
 `npm run start:static` (Python's static server) also works, without YouTube videos.
 
+### One-click updates
+
+If you got the app with `git clone`, **Settings → Updates** keeps it current. The app checks GitHub each time it loads, and a green dot on the Settings gear means an update is ready. **Update now** pulls the latest code, runs `npm install` if the dependencies changed, restarts the server and reloads the page.
+
+- It's fast-forward only (`git pull --ff-only`). If you've edited files or made commits locally, git refuses, nothing changes and Settings shows why.
+- It needs `npm start` (the server restarts itself) and Git on your PATH. The section is hidden on Vercel and with `start:static`.
+
 ## Add songs to the built-in catalog (optional)
 
 The repo ships with **0 included songs** (`songs/` is empty and `tracks.json` has `totalTracks: 0`). If you want to bundle static tracks into a deploy:
@@ -100,7 +107,8 @@ npm run test:yt        # optional live check against YouTube
 | `downloads.js`, `api/_lib/downloads.js` | auto-downloads: playback trigger + Settings (browser), file saving and disk checks (server) |
 | `api/yt.js`, `api/_lib/` | `/api/yt` function: info, audio/video streams, captions, YouTube Music search/suggest, YouTube cookies (`yt-cookies.js`) |
 | `yt-allowlist.json` | suggested YouTube videos and their credits |
-| `scripts/dev-server.js` | local server for the app and `/api` |
+| `scripts/dev-server.js` | local server for the app and `/api`; restarts itself after an update |
+| `app-update.js`, `scripts/updater.js` | one-click updates: Settings button (browser), git pull + npm install (server) |
 | `scripts/build-catalog.js` | builds `tracks.json` |
 
 ## Credits

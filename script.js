@@ -4430,7 +4430,8 @@ function openSearchView(queryInput, options = {}) {
 
     const searchInput = document.getElementById("search-input");
     const searchClearBtn = document.getElementById("search-clear-btn");
-    if (searchInput && searchInput.value !== activeSearchQuery) {
+    // Compare trimmed: rewriting "foo " → "foo" while typing would eat every space the user types
+    if (searchInput && searchInput.value.trim() !== activeSearchQuery) {
         searchInput.value = activeSearchQuery;
     }
     if (searchClearBtn) {
