@@ -6,6 +6,8 @@
  *   GET /api/yt/info?id=                    → title, channel, duration, thumbnails, license, chosen formats, captions
  *   GET|HEAD /api/yt/stream?id=&kind=audio|video → bytes proxied from YouTube, Range/206 supported
  *   GET /api/yt/captions?id=&lang=          → WebVTT
+ *   GET /api/yt/search?q=                   → YouTube Music songs [{ id, title, artist, duration, thumbnail }]
+ *   GET /api/yt/suggest?q=                  → autocomplete strings
  *   POST /api/yt/cookies (export JSON/text) → saves YouTube sign-in cookies as HttpOnly cookies (see yt-cookies.js)
  *   DELETE /api/yt/cookies                  → forgets them
  *
@@ -269,6 +271,25 @@ function createYtHandler(options = {}) {
     const log = options.log === undefined ? console : options.log;
     const infoCache = new Map(); // id → { promise, expiresAt }
     const captionCache = new Map(); // `${id}|${lang}` → text
+    const discoveryCache = new Map(); // `${kind}|${query}` → { promise, expiresAt }
+
+    /** Search/suggest answers, cached for a few minutes per query (typing repeats them a lot). */
+    function discover(kind, rawQuery) {
+        const query = String(rawQuery || "").replace(/\s+/g, " ").trim().slice(0, 150);
+        if (!query) return Promise.resolve([]);
+        if (!adapter || typeof adapter[kind] !== "function") return Promise.resolve([]);
+        const key = `${kind}|${query.toLowerCase()}`;
+        const hit = discoveryCache.get(key);
+        if (hit && hit.expiresAt > now()) return hit.promise;
+        const promise = Promise.resolve(adapter[kind](query));
+        const slot = { promise, expiresAt: now() + 5 * 60000 };
+        discoveryCache.set(key, slot);
+        promise.catch(() => {
+            if (discoveryCache.get(key) === slot) discoveryCache.delete(key);
+        });
+        if (discoveryCache.size > 200) discoveryCache.delete(discoveryCache.keys().next().value);
+        return promise;
+    }
 
     function getAllowlist() {
         return toAllowlist(options.allowlist);
@@ -484,6 +505,8 @@ function createYtHandler(options = {}) {
             } else if (route === "info") await handleInfo(req, url, res);
             else if (route === "stream") await handleStream(req, url, res);
             else if (route === "captions") await handleCaptions(req, url, res);
+            else if (route === "search") sendJson(res, 200, { results: await discover("search", url.searchParams.get("q")) });
+            else if (route === "suggest") sendJson(res, 200, { suggestions: await discover("suggest", url.searchParams.get("q")) });
             else sendJson(res, 404, { error: { code: "NO_ROUTE", message: "Unknown /api/yt route." } });
         } catch (err) {
             sendError(res, err, log, req);

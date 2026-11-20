@@ -430,7 +430,9 @@ test("index.html and style.css: Add Music entry points, progress, pill, details 
         assert.match(html, new RegExp(`id="${id}"[^>]*aria-haspopup="menu"[^>]*aria-expanded="false"`), id);
     }
     assert.match(html, /id="add-music-menu" role="menu"/);
-    assert.equal((html.match(/role="menuitem"/g) || []).length, 3);
+    // The YouTube search row menu has its own items
+    const withoutYtMenu = html.replace(/<div class="search-yt-menu"[\s\S]*?<\/div>/, "");
+    assert.equal((withoutYtMenu.match(/role="menuitem"/g) || []).length, 3);
     assert.ok(html.indexOf("Add a folder…") < html.indexOf("Add files…"), "folder is the first item");
     assert.ok(html.includes("or drag and drop anywhere"));
     assert.match(html, /id="import-progress-bar" role="progressbar"/);

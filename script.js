@@ -4348,8 +4348,9 @@ function renderSearchView(resultsInput) {
     }
 
     // Empty state fallback
+    renderYouTubeSearch();
     if (emptyStateEl) {
-        emptyStateEl.hidden = results.hasExactMatches;
+        emptyStateEl.hidden = results.hasExactMatches || ytSearchHasContent();
         if (!results.hasExactMatches && emptyTitleEl) {
             emptyTitleEl.textContent = `No exact catalog match for "${results.query}"`;
         }
@@ -6314,6 +6315,7 @@ function initShellControls() {
         });
         if (typeof searchInput.addEventListener === "function") {
             searchInput.addEventListener("keydown", (e) => {
+                if (typeof handleYouTubeSuggestKey === "function" && handleYouTubeSuggestKey(e)) return;
                 if (e.key === "Enter") {
                     e.preventDefault();
                     if (e.shiftKey) {
@@ -9664,12 +9666,17 @@ function addYouTubeVideo(input, options = {}) {
     const existing = songs.find((t) => t.youtubeId === id && t.source === "youtube");
     if (existing) return { status: "exists", track: existing, message: `“${existing.title}” is already in YouTube videos.` };
     const suggested = findAllowlistEntry(id);
-    const track = YT.buildYouTubeTrack(suggested || YT.entryFromInfo(id));
+    const known = options.info && options.info.title ? options.info : null; // details already in hand (search)
+    const track = YT.buildYouTubeTrack(suggested || YT.entryFromInfo(id, known || {}));
     songs.push(track);
     setAddedYouTubeIds([...getAddedYouTubeIds(), id]);
     if (!options.skipRefresh) {
         refreshLibraryViews();
         updateYouTubeCount();
+    }
+    if (!suggested && known) {
+        setYouTubeVideoMeta(id, known);
+        return { status: "added", track, message: `Added “${track.title}” by ${track.artistDisplay}.` };
     }
     if (!suggested) {
         // Saved with placeholders first so a reload keeps it; the lookup fills in the real title
@@ -10140,6 +10147,385 @@ async function handleYouTubePlaybackError(track) {
     return code;
 }
 
+// ---------- YouTube Music search + autocomplete in the top search bar ----------
+
+const ytSearch = { query: "", results: [], status: "idle", timer: null, controller: null, menuFor: null };
+const ytSuggest = { items: [], active: -1, timer: null, controller: null, query: "" };
+
+function isYouTubeAudioOnly() {
+    const store = getStorage();
+    const prefs = store && typeof store.getPreferences === "function" ? store.getPreferences() : null;
+    return !(prefs && prefs.ytAudioOnly === false); // default ON
+}
+
+/** "Audio only" off → the music video opens with each YouTube track; on → sound only. */
+function setYouTubeAudioOnly(on) {
+    const store = getStorage();
+    if (store && typeof store.setPreferences === "function") store.setPreferences({ ytAudioOnly: Boolean(on) });
+    const box = document.getElementById("yt-audio-only");
+    if (box) box.checked = Boolean(on);
+    ytVideoWanted = !on;
+    const track = songs[currentTrackIndex];
+    if (isYouTubeTrack(track)) {
+        if (on && ytVideo.open) closeYouTubeVideo();
+        else if (!on && !ytVideo.open) openYouTubeVideo(track, { quiet: true });
+    }
+}
+
+function formatYtDuration(sec) {
+    const n = Math.max(0, Math.round(Number(sec) || 0));
+    if (!n) return "";
+    const h = Math.floor(n / 3600);
+    const m = Math.floor((n % 3600) / 60);
+    const ss = String(n % 60).padStart(2, "0");
+    return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
+}
+
+function ytSearchHasContent() {
+    return ytSearch.results.length > 0 || ytSearch.status === "loading";
+}
+
+function scheduleYouTubeSearch(query) {
+    const q = String(query || "").trim();
+    if (ytSearch.timer) clearTimeout(ytSearch.timer);
+    if (q === ytSearch.query && ytSearch.status !== "error") return;
+    if (!q) {
+        if (ytSearch.controller) ytSearch.controller.abort();
+        ytSearch.query = "";
+        ytSearch.results = [];
+        ytSearch.status = "idle";
+        renderYouTubeSearch();
+        return;
+    }
+    ytSearch.timer = setTimeout(() => runYouTubeSearch(q), 350);
+}
+
+async function runYouTubeSearch(q) {
+    if (ytApiState.status === "missing") {
+        ytSearch.status = "missing";
+        renderYouTubeSearch();
+        return;
+    }
+    if (ytSearch.controller) ytSearch.controller.abort();
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    ytSearch.controller = controller;
+    ytSearch.query = q;
+    ytSearch.status = "loading";
+    renderYouTubeSearch();
+    try {
+        const res = await fetch(`./api/yt/search?q=${encodeURIComponent(q)}`, controller ? { signal: controller.signal } : undefined);
+        const body = await res.json();
+        if (ytSearch.query !== q) return;
+        if (!res.ok) throw new Error((body && body.error && body.error.message) || "search failed");
+        ytSearch.results = Array.isArray(body.results) ? body.results : [];
+        ytSearch.status = "done";
+    } catch (err) {
+        if (err && err.name === "AbortError") return;
+        if (ytSearch.query !== q) return;
+        ytSearch.results = [];
+        ytSearch.status = "error";
+    }
+    renderYouTubeSearch();
+}
+
+function renderYouTubeSearch() {
+    const section = document.getElementById("search-yt-section");
+    const list = document.getElementById("search-yt-list");
+    const status = document.getElementById("search-yt-status");
+    if (!section || !list) return;
+    const visible = activeView === "search" && Boolean(activeSearchQuery) && ["all", "songs"].includes(activeSearchCategory) && ytSearch.status !== "idle";
+    section.hidden = !visible;
+    const empty = document.getElementById("search-empty-state");
+    if (empty && activeView === "search") empty.hidden = Boolean(activeSearchResults && activeSearchResults.hasExactMatches) || ytSearchHasContent();
+    const box = document.getElementById("yt-audio-only");
+    if (box) box.checked = isYouTubeAudioOnly();
+    if (!visible) return;
+    const messages = {
+        loading: "Searching YouTube Music…",
+        error: "Couldn't search YouTube Music right now. Try again in a moment.",
+        missing: getYouTubeModule()?.describeYtError("NO_SERVER") || "",
+        done: ytSearch.results.length ? "" : `No YouTube Music songs for “${ytSearch.query}”.`,
+    };
+    if (status) status.textContent = messages[ytSearch.status] || "";
+    list.textContent = "";
+    if (ytSearch.status === "loading" && !ytSearch.results.length) return;
+    ytSearch.results.forEach((r, i) => {
+        const li = document.createElement("li");
+        li.className = "search-yt-row";
+        const play = document.createElement("button");
+        play.type = "button";
+        play.className = "search-yt-play";
+        play.dataset.ytIndex = String(i);
+        play.setAttribute("aria-label", `Play ${r.title} by ${r.artist}`);
+        const img = document.createElement("img");
+        img.className = "search-yt-thumb";
+        img.alt = "";
+        img.loading = "lazy";
+        img.referrerPolicy = "no-referrer";
+        img.src = r.thumbnail || getYouTubeModule()?.thumbnailUrl(r.id) || "";
+        const text = document.createElement("span");
+        text.className = "search-yt-text";
+        const title = document.createElement("span");
+        title.className = "search-yt-title";
+        title.textContent = r.title;
+        const sub = document.createElement("span");
+        sub.className = "search-yt-sub";
+        const dur = formatYtDuration(r.duration);
+        if (dur) {
+            const chip = document.createElement("span");
+            chip.className = "search-yt-chip";
+            chip.textContent = dur;
+            sub.append(chip);
+        }
+        sub.append(document.createTextNode(r.artist || "YouTube"));
+        text.append(title, sub);
+        play.append(img, text);
+        const more = document.createElement("button");
+        more.type = "button";
+        more.className = "search-yt-more";
+        more.dataset.ytMore = String(i);
+        more.setAttribute("aria-label", `More options for ${r.title}`);
+        more.setAttribute("aria-haspopup", "menu");
+        more.setAttribute("aria-expanded", "false");
+        more.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><circle cx="12" cy="5" r="2" fill="currentColor"/><circle cx="12" cy="12" r="2" fill="currentColor"/><circle cx="12" cy="19" r="2" fill="currentColor"/></svg>';
+        li.append(play, more);
+        list.append(li);
+    });
+}
+
+/** Adds a search result to YouTube videos (needed to queue it) and returns its track. */
+function trackForYouTubeResult(r) {
+    if (!r) return null;
+    const result = addYouTubeVideo(r.id, { info: { title: r.title, artist: r.artist, channel: r.artist, duration: r.duration } });
+    return result.track || null;
+}
+
+function playYouTubeSearchResult(index) {
+    const r = ytSearch.results[index];
+    const track = trackForYouTubeResult(r);
+    if (!track) return false;
+    renderYouTubeSuggest([]);
+    ytFailedTrackIds.delete(track.id);
+    ytVideoWanted = !isYouTubeAudioOnly();
+    playMusic(track.id, false);
+    return true;
+}
+
+function closeYouTubeSearchMenu() {
+    const menu = document.getElementById("search-yt-menu");
+    if (menu) menu.hidden = true;
+    if (ytSearch.menuFor) ytSearch.menuFor.setAttribute("aria-expanded", "false");
+    ytSearch.menuFor = null;
+}
+
+function openYouTubeSearchMenu(btn, index) {
+    const menu = document.getElementById("search-yt-menu");
+    const r = ytSearch.results[index];
+    if (!menu || !r) return;
+    closeYouTubeSearchMenu();
+    menu.dataset.ytIndex = String(index);
+    const link = menu.querySelector('[data-yt-menu="open"]');
+    if (link) link.href = `https://music.youtube.com/watch?v=${encodeURIComponent(r.id)}`;
+    const rect = btn.getBoundingClientRect();
+    menu.hidden = false;
+    const w = menu.offsetWidth || 200;
+    menu.style.top = `${Math.min(rect.bottom + 4, window.innerHeight - menu.offsetHeight - 8)}px`;
+    menu.style.left = `${Math.max(8, Math.min(rect.right - w, window.innerWidth - w - 8))}px`;
+    btn.setAttribute("aria-expanded", "true");
+    ytSearch.menuFor = btn;
+    const first = menu.querySelector("[role=menuitem]");
+    if (first) first.focus();
+}
+
+function handleYouTubeSearchMenu(action) {
+    const menu = document.getElementById("search-yt-menu");
+    const index = Number(menu && menu.dataset.ytIndex);
+    const r = ytSearch.results[index];
+    if (action === "open") {
+        closeYouTubeSearchMenu();
+        return;
+    }
+    const back = ytSearch.menuFor;
+    closeYouTubeSearchMenu();
+    if (!r) return;
+    if (action === "play") playYouTubeSearchResult(index);
+    else if (action === "queue") {
+        const track = trackForYouTubeResult(r);
+        if (track) playTrackNext(track.id);
+    } else if (action === "add") {
+        const existed = songs.some((t) => t.source === "youtube" && t.youtubeId === r.id);
+        trackForYouTubeResult(r);
+        showLibraryToast(existed ? `“${r.title}” is already in YouTube videos.` : `Added “${r.title}” to YouTube videos.`);
+    }
+    if (back && typeof back.focus === "function") back.focus();
+}
+
+// --- autocomplete ---
+
+function scheduleYouTubeSuggest(query) {
+    const q = String(query || "").trim();
+    if (ytSuggest.timer) clearTimeout(ytSuggest.timer);
+    if (!q || ytApiState.status === "missing") {
+        renderYouTubeSuggest([]);
+        return;
+    }
+    ytSuggest.timer = setTimeout(async () => {
+        if (ytSuggest.controller) ytSuggest.controller.abort();
+        const controller = typeof AbortController === "function" ? new AbortController() : null;
+        ytSuggest.controller = controller;
+        ytSuggest.query = q;
+        try {
+            const res = await fetch(`./api/yt/suggest?q=${encodeURIComponent(q)}`, controller ? { signal: controller.signal } : undefined);
+            const body = await res.json();
+            const input = document.getElementById("search-input");
+            if (ytSuggest.query !== q || !input || input.value.trim() !== q || document.activeElement !== input) return;
+            const items = (res.ok && Array.isArray(body.suggestions) ? body.suggestions : []).filter((x) => x.toLowerCase() !== q.toLowerCase());
+            renderYouTubeSuggest(items);
+        } catch (_) {}
+    }, 150);
+}
+
+function renderYouTubeSuggest(items) {
+    const list = document.getElementById("search-suggest-list");
+    const input = document.getElementById("search-input");
+    if (!list || !input) return;
+    ytSuggest.items = items || [];
+    ytSuggest.active = -1;
+    list.textContent = "";
+    ytSuggest.items.forEach((text, i) => {
+        const li = document.createElement("li");
+        li.id = `search-suggest-${i}`;
+        li.className = "search-suggest-item";
+        li.setAttribute("role", "option");
+        li.setAttribute("aria-selected", "false");
+        li.dataset.suggestIndex = String(i);
+        li.textContent = text;
+        list.append(li);
+    });
+    const open = ytSuggest.items.length > 0;
+    list.hidden = !open;
+    input.setAttribute("aria-expanded", String(open));
+    input.removeAttribute("aria-activedescendant");
+}
+
+function moveYouTubeSuggest(delta) {
+    const n = ytSuggest.items.length;
+    if (!n) return false;
+    // Positions -1 (the typed text) .. n-1, wrapping
+    ytSuggest.active = ((ytSuggest.active + 1 + delta + n + 1) % (n + 1)) - 1;
+    const input = document.getElementById("search-input");
+    document.querySelectorAll(".search-suggest-item").forEach((el, i) => {
+        el.setAttribute("aria-selected", String(i === ytSuggest.active));
+        el.classList.toggle("is-active", i === ytSuggest.active);
+    });
+    if (input) {
+        if (ytSuggest.active >= 0) input.setAttribute("aria-activedescendant", `search-suggest-${ytSuggest.active}`);
+        else input.removeAttribute("aria-activedescendant");
+    }
+    return true;
+}
+
+/** Arrow keys / Enter / Escape for the suggestion list; true when the key was used here. */
+function handleYouTubeSuggestKey(e) {
+    const open = ytSuggest.items.length > 0;
+    if (!open) return false;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        moveYouTubeSuggest(e.key === "ArrowDown" ? 1 : -1);
+        return true;
+    }
+    if (e.key === "Enter" && ytSuggest.active >= 0) {
+        e.preventDefault();
+        pickYouTubeSuggest(ytSuggest.active);
+        return true;
+    }
+    if (e.key === "Escape") {
+        e.preventDefault();
+        renderYouTubeSuggest([]);
+        return true;
+    }
+    if (e.key === "Enter") renderYouTubeSuggest([]);
+    return false;
+}
+
+function pickYouTubeSuggest(index) {
+    const text = ytSuggest.items[index];
+    if (!text) return false;
+    renderYouTubeSuggest([]);
+    setSearchQuery(text);
+    scheduleYouTubeSearch(text);
+    return true;
+}
+
+function initYouTubeSearch() {
+    const input = document.getElementById("search-input");
+    if (input) {
+        input.addEventListener("input", () => {
+            scheduleYouTubeSearch(input.value);
+            scheduleYouTubeSuggest(input.value);
+        });
+        input.addEventListener("blur", () => setTimeout(() => renderYouTubeSuggest([]), 150));
+    }
+    const suggest = document.getElementById("search-suggest-list");
+    if (suggest) {
+        // mousedown so the pick happens before the input's blur closes the list
+        suggest.addEventListener("mousedown", (e) => {
+            const li = e.target && e.target.closest && e.target.closest("[data-suggest-index]");
+            if (!li) return;
+            e.preventDefault();
+            pickYouTubeSuggest(Number(li.dataset.suggestIndex));
+        });
+    }
+    const list = document.getElementById("search-yt-list");
+    if (list) {
+        list.addEventListener("click", (e) => {
+            const more = e.target && e.target.closest && e.target.closest("[data-yt-more]");
+            if (more) {
+                if (ytSearch.menuFor === more) closeYouTubeSearchMenu();
+                else openYouTubeSearchMenu(more, Number(more.dataset.ytMore));
+                return;
+            }
+            const play = e.target && e.target.closest && e.target.closest("[data-yt-index]");
+            if (play) playYouTubeSearchResult(Number(play.dataset.ytIndex));
+        });
+    }
+    const menu = document.getElementById("search-yt-menu");
+    if (menu) {
+        menu.addEventListener("click", (e) => {
+            const item = e.target && e.target.closest && e.target.closest("[data-yt-menu]");
+            if (item) handleYouTubeSearchMenu(item.dataset.ytMenu);
+        });
+        menu.addEventListener("keydown", (e) => {
+            const items = Array.from(menu.querySelectorAll("[role=menuitem]"));
+            const i = items.indexOf(document.activeElement);
+            if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                const back = ytSearch.menuFor;
+                closeYouTubeSearchMenu();
+                if (back) back.focus();
+            } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                e.preventDefault();
+                const next = items[(i + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length];
+                if (next) next.focus();
+            }
+        });
+        if (typeof document.addEventListener === "function") document.addEventListener("click", (e) => {
+            if (menu.hidden) return;
+            if (e.target && e.target.closest && (e.target.closest("#search-yt-menu") || e.target.closest("[data-yt-more]"))) return;
+            closeYouTubeSearchMenu();
+        });
+        if (typeof window.addEventListener === "function") window.addEventListener("resize", closeYouTubeSearchMenu);
+        if (typeof document.addEventListener === "function") document.addEventListener("scroll", closeYouTubeSearchMenu, true);
+    }
+    const audioOnly = document.getElementById("yt-audio-only");
+    if (audioOnly) {
+        audioOnly.checked = isYouTubeAudioOnly();
+        audioOnly.addEventListener("change", () => setYouTubeAudioOnly(audioOnly.checked));
+    }
+    ytVideoWanted = !isYouTubeAudioOnly();
+}
+
 // ---------- YouTube cookies (fix for "Sign in to confirm you're not a bot") ----------
 
 const ytCookies = { signedIn: false, returnFocus: null, busy: false };
@@ -10315,6 +10701,7 @@ function initYouTubeCookiesDialog() {
 
 function initYouTubeControls() {
     initYouTubeCookiesDialog();
+    initYouTubeSearch();
     const libBtn = document.getElementById("lib-youtube");
     if (libBtn) libBtn.addEventListener("click", () => openYouTubeDetail());
     const form = document.getElementById("yt-add-form");

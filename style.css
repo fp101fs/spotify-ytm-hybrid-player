@@ -5220,3 +5220,233 @@ span.detail-track-cover.import-shimmer {
 .yt-cookies-dialog [hidden] {
     display: none;
 }
+
+/* ---------- YouTube Music search ---------- */
+.top-search-wrapper {
+    position: relative;
+}
+
+.search-suggest-list {
+    position: absolute;
+    inset-inline: 0;
+    inset-block-start: calc(100% + 6px);
+    min-inline-size: min(320px, calc(100vw - 32px));
+    z-index: 60;
+    margin: 0;
+    padding: 6px 0;
+    list-style: none;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-highlight);
+    border-radius: 12px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+
+.search-suggest-list[hidden] {
+    display: none;
+}
+
+.search-suggest-item {
+    padding: 8px 16px;
+    font-size: 0.92rem;
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.search-suggest-item:hover,
+.search-suggest-item.is-active {
+    background: var(--bg-elevated-hover);
+}
+
+.search-yt-section {
+    margin-block: 8px 24px;
+}
+
+.search-yt-section[hidden] {
+    display: none;
+}
+
+.search-yt-section .section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.yt-audio-only {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.84rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    cursor: pointer;
+    position: relative;
+}
+
+.yt-audio-only input {
+    position: absolute;
+    opacity: 0;
+    inline-size: 1px;
+    block-size: 1px;
+}
+
+.yt-audio-only input:checked + .settings-switch-track {
+    background-color: var(--accent-spotify);
+    border-color: var(--accent-spotify);
+}
+
+.yt-audio-only input:checked + .settings-switch-track .settings-switch-thumb {
+    transform: translateX(20px);
+    background-color: #000;
+}
+
+.yt-audio-only input:focus-visible + .settings-switch-track {
+    outline: 2px solid var(--text-primary);
+    outline-offset: 2px;
+}
+
+.search-yt-status {
+    margin: 0 0 6px;
+    min-block-size: 0;
+    font-size: 0.86rem;
+    color: var(--text-secondary);
+}
+
+.search-yt-status:empty {
+    display: none;
+}
+
+.search-yt-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.search-yt-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    border-radius: 8px;
+}
+
+.search-yt-row:hover {
+    background: var(--bg-elevated-hover);
+}
+
+.search-yt-play {
+    flex: 1 1 auto;
+    min-inline-size: 0;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 8px;
+    background: none;
+    border: 0;
+    color: inherit;
+    text-align: start;
+    cursor: pointer;
+    border-radius: 8px;
+}
+
+.search-yt-thumb {
+    flex: none;
+    inline-size: 56px;
+    block-size: 56px;
+    border-radius: 4px;
+    object-fit: cover;
+    background: var(--bg-card);
+}
+
+.search-yt-text {
+    min-inline-size: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.search-yt-title {
+    font-size: 1.05rem;
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.search-yt-sub {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.92rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.search-yt-chip {
+    flex: none;
+    padding: 0 4px;
+    border-radius: 3px;
+    background: var(--text-secondary);
+    color: #111;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    line-height: 1.5;
+}
+
+.search-yt-more {
+    flex: none;
+    inline-size: 40px;
+    block-size: 40px;
+    display: grid;
+    place-items: center;
+    background: none;
+    border: 0;
+    border-radius: 50%;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.search-yt-more:hover,
+.search-yt-more[aria-expanded="true"] {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.search-yt-menu {
+    position: fixed;
+    z-index: 80;
+    min-inline-size: 200px;
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-highlight);
+    border-radius: 8px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+}
+
+.search-yt-menu[hidden] {
+    display: none;
+}
+
+.search-yt-menu > * {
+    padding: 10px 12px;
+    border: 0;
+    border-radius: 4px;
+    background: none;
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 0.9rem;
+    text-align: start;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.search-yt-menu > *:hover,
+.search-yt-menu > *:focus-visible {
+    background: var(--bg-elevated-hover);
+    outline: none;
+}

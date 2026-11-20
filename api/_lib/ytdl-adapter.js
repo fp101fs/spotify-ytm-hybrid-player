@@ -6,6 +6,8 @@
  *   getInfo(id, { signal, cookie })  → { id, title, channel, duration, thumbnails, formats, captions, expiresAt, raw }
  *   openStream(info, format, opts)   → Node Readable of bytes opts.start..opts.end (inclusive)
  *   getCaptions(info, lang)          → WebVTT text
+ *   search(query, { limit })         → YouTube Music songs [{ id, title, artist, duration, thumbnail }]
+ *   suggest(query)                   → autocomplete strings
  *
  * `formats` are plain objects: { itag, mimeType, container, hasAudio, hasVideo, audioCodec, videoCodec,
  * audioBitrate, bitrate, width, height, contentLength, isDrc, isLive, isHLS, raw }.
@@ -103,6 +105,32 @@ function createYtdlAdapter(options = {}) {
             if (Number.isFinite(start)) range.start = start;
             if (Number.isFinite(end)) range.end = end;
             return y.open(info.raw, format.raw).read({ range, signal });
+        },
+
+        /** YouTube Music songs for `query` → [{ id, title, artist, duration, thumbnail }]. */
+        async search(query, { signal, limit = 12 } = {}) {
+            const { lib, instance: y } = await ytdl();
+            const type = lib.SearchType ? lib.SearchType.Song : "song";
+            const list = await y.search(query, { type, limit, signal });
+            return list
+                .filter((v) => v && v.id && !v.isLive && !v.isUpcoming)
+                .map((v) => {
+                    const thumbs = (v.thumbnails || []).slice().sort((a, b) => (a.width || 0) - (b.width || 0));
+                    const thumb = thumbs.find((t) => (t.width || 0) >= 96) || thumbs[thumbs.length - 1];
+                    return {
+                        id: v.id,
+                        title: v.title || "",
+                        artist: (v.author && v.author.name) || "",
+                        duration: Number(v.lengthSeconds) || 0,
+                        thumbnail: thumb ? thumb.url : "",
+                    };
+                });
+        },
+
+        /** YouTube Music autocomplete completions for `query`. */
+        async suggest(query, { signal } = {}) {
+            const { instance: y } = await ytdl();
+            return (await y.getSuggestions(query, { music: true, signal })).slice(0, 8);
         },
 
         async getCaptions(info, lang) {

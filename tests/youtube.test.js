@@ -714,3 +714,23 @@ test("handler: an expired cookie maps to COOKIE_EXPIRED and is cleared", async (
     });
     assert.ok(YT.needsCookies("BOT_CHECK") && YT.needsCookies("COOKIE_EXPIRED") && !YT.needsCookies("NOT_FOUND"));
 });
+
+test("handler: /api/yt/search and /api/yt/suggest (cached per query)", async () => {
+    const adapter = fakeAdapter();
+    let searches = 0;
+    adapter.search = async (q) => {
+        searches++;
+        return [{ id: ID, title: `Song for ${q}`, artist: "Artist", duration: 200, thumbnail: "https://x/t.jpg" }];
+    };
+    adapter.suggest = async (q) => [`${q} one`, `${q} two`];
+    const handler = Server.createYtHandler({ adapter, allowlist: ALLOWLIST, log: null });
+    await withServer(handler, async (base) => {
+        const a = await (await fetch(`${base}/api/yt/search?q=sir%20duke`)).json();
+        assert.strictEqual(a.results[0].title, "Song for sir duke");
+        await fetch(`${base}/api/yt/search?q=Sir%20%20Duke`);
+        assert.strictEqual(searches, 1, "same query (case/space) is cached");
+        assert.deepStrictEqual((await (await fetch(`${base}/api/yt/search?q=`)).json()).results, []);
+        const s = await (await fetch(`${base}/api/yt/suggest?q=stevie`)).json();
+        assert.deepStrictEqual(s.suggestions, ["stevie one", "stevie two"]);
+    });
+});

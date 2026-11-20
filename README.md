@@ -35,6 +35,8 @@ A static-first music player that mixes Spotify's 3-pane layout, Daily Mixes and 
 - A few public-domain and Creative Commons videos are offered as suggestions, with credits. They are listed in `yt-allowlist.json` (`id`, `title`, `artist`, plus optional `license`, `source`, `album`, `genre`, `moods`, …).
 - Sound goes through the app's server (`/api/yt`, using `@distube/ytdl-core`), so crossfade, mixes and MediaSession work. **Video** shows a muted copy that follows the audio, with captions when YouTube has them.
 - Without the server (plain static hosting), or when YouTube blocks the server (for example "Sign in to confirm you're not a bot", common on cloud hosts), videos open in YouTube's own player instead.
+- **YouTube Music search.** Typing in the top search bar also searches YouTube Music songs (`/api/yt/search`), with autocomplete suggestions under the bar (`/api/yt/suggest`, arrow keys + Enter). Results show in a **YouTube Music** section. Tap a row to play it right away (it's added to YouTube videos). The ⋮ menu offers Play next, Add to YouTube videos, and Open on YouTube.
+- **Audio only** (on by default, switch in the YouTube Music section) plays YouTube tracks as sound only. Turn it off to have the music video open with each YouTube track.
 - **Bot check fix: YouTube cookies.** The bot-check error offers **Add YouTube cookies** (also a 🍪 button under "Add YouTube video"). The modal walks through installing [Cookie-Editor](https://chromewebstore.google.com/detail/cookie-editor/hlkenndednhfkekhgcdicdfddnkalmdm), signing in on YouTube, and clicking **Export → JSON**. Paste the export into the dashed box, or drop or choose a saved file. It also accepts a Netscape `cookies.txt` or a raw `Cookie` header. Use a spare Google account.
   - The server (`POST /api/yt/cookies`) keeps only the youtube.com sign-in cookies. It returns them to the browser as HttpOnly, SameSite=Strict cookies on `/api/yt`, and the server stores nothing, so it works the same on Vercel and with `npm start`. `DELETE /api/yt/cookies` (**Remove saved cookies**) forgets them.
   - Expired cookies give a `COOKIE_EXPIRED` error, which clears them and offers the modal again.
@@ -85,7 +87,7 @@ npm run test:yt        # optional live check against YouTube
 | `library.js` | local import, tag parsing, playlists |
 | `metadata-lookup.js` | optional MusicBrainz / Cover Art Archive / iTunes lookup |
 | `youtube.js` | YouTube link parsing, suggestions, tracks (browser + server) |
-| `api/yt.js`, `api/_lib/` | `/api/yt` function: info, audio/video streams, captions, YouTube cookies (`yt-cookies.js`) |
+| `api/yt.js`, `api/_lib/` | `/api/yt` function: info, audio/video streams, captions, YouTube Music search/suggest, YouTube cookies (`yt-cookies.js`) |
 | `yt-allowlist.json` | suggested YouTube videos and their credits |
 | `scripts/dev-server.js` | local server for the app and `/api` |
 | `scripts/build-catalog.js` | builds `tracks.json` |

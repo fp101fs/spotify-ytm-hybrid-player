@@ -187,7 +187,12 @@
                             placeholder="What do you want to play? Search songs, artists, moods..."
                             aria-label="Search songs, artists, albums, or moods"
                             autocomplete="off"
+                            role="combobox"
+                            aria-autocomplete="list"
+                            aria-expanded="false"
+                            aria-controls="search-suggest-list"
                         >
+                        <ul class="search-suggest-list" id="search-suggest-list" role="listbox" aria-label="Search suggestions" hidden></ul>
                         <button type="button" id="search-clear-btn" class="search-clear-btn" aria-label="Clear search" hidden>&times;</button>
                         <button type="button" id="search-mix-btn" class="search-mix-pill" title="Start a radio mix from current search or filter">
                             <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11zM1 8a7 7 0 1 1 14 0A7 7 0 0 1 1 8zm7-2.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"/></svg>
@@ -543,6 +548,20 @@
                         </header>
 
                         <p id="search-live-status" role="status" class="visually-hidden"></p>
+
+                        <!-- YouTube Music search: tap a row to play it -->
+                        <section class="search-yt-section" id="search-yt-section" aria-labelledby="search-yt-heading" hidden>
+                            <div class="section-header">
+                                <h2 id="search-yt-heading">YouTube Music</h2>
+                                <label class="yt-audio-only" for="yt-audio-only">
+                                    <span>Audio only</span>
+                                    <input type="checkbox" role="switch" id="yt-audio-only" checked>
+                                    <span class="settings-switch-track" aria-hidden="true"><span class="settings-switch-thumb"></span></span>
+                                </label>
+                            </div>
+                            <p class="search-yt-status" id="search-yt-status" role="status" aria-live="polite"></p>
+                            <ul class="search-yt-list" id="search-yt-list"></ul>
+                        </section>
 
                         <!-- Top Result + Matching Songs 2-Column Hero Grid -->
                         <div class="search-top-grid" id="search-top-grid">
@@ -1011,6 +1030,13 @@
                 </div>
             </div>
         </dialog>
+
+        <div class="search-yt-menu" id="search-yt-menu" role="menu" aria-label="Song options" hidden>
+            <button type="button" role="menuitem" data-yt-menu="play">Play</button>
+            <button type="button" role="menuitem" data-yt-menu="queue">Play next</button>
+            <button type="button" role="menuitem" data-yt-menu="add">Add to YouTube videos</button>
+            <a role="menuitem" data-yt-menu="open" href="#" target="_blank" rel="noopener noreferrer">Open on YouTube ↗</a>
+        </div>
 
         <dialog class="shortcuts-dialog playlist-dialog yt-cookies-dialog" id="yt-cookies-dialog" aria-labelledby="yt-cookies-title" aria-describedby="yt-cookies-intro" hidden>
             <div class="shortcuts-dialog-card playlist-dialog-card">
