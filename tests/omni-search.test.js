@@ -408,7 +408,7 @@ test("startSearchMix turns any search query into an endless tailored radio stati
     }
 
     // 2. Even a zero-match custom query turns into a working Search Mix station
-    const customMix = shell.startSearchMix("midnight lo-fi coding");
+    const customMix = shell.startSearchMix("midnight lo-fi coding", { localOnly: true });
     assert.equal(customMix.mixSession.badge, "SEARCH MIX");
     assert.equal(customMix.mixSession.label, 'Search Mix: "midnight lo-fi coding"');
     assert.ok(customMix.currentTrack);

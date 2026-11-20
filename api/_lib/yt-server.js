@@ -8,6 +8,7 @@
  *   GET /api/yt/captions?id=&lang=          → WebVTT
  *   GET /api/yt/search?q=                   → YouTube Music songs [{ id, title, artist, duration, thumbnail }]
  *   GET /api/yt/suggest?q=                  → autocomplete strings
+ *   GET /api/yt/radio?id=                   → the song's YouTube Music radio (same shape as search), for Start mix
  *   POST /api/yt/cookies (export JSON/text) → saves YouTube sign-in cookies as HttpOnly cookies (see yt-cookies.js)
  *   DELETE /api/yt/cookies                  → forgets them
  *
@@ -281,7 +282,7 @@ function createYtHandler(options = {}) {
         const query = String(rawQuery || "").replace(/\s+/g, " ").trim().slice(0, 150);
         if (!query) return Promise.resolve([]);
         if (!adapter || typeof adapter[kind] !== "function") return Promise.resolve([]);
-        const key = `${kind}|${query.toLowerCase()}`;
+        const key = `${kind}|${kind === "radio" ? query : query.toLowerCase()}`; // video IDs are case-sensitive
         const hit = discoveryCache.get(key);
         if (hit && hit.expiresAt > now()) return hit.promise;
         const promise = Promise.resolve(adapter[kind](query));
@@ -510,6 +511,10 @@ function createYtHandler(options = {}) {
             else if (route === "captions") await handleCaptions(req, url, res);
             else if (route === "search") sendJson(res, 200, { results: await discover("search", url.searchParams.get("q")) });
             else if (route === "suggest") sendJson(res, 200, { suggestions: await discover("suggest", url.searchParams.get("q")) });
+            else if (route === "radio") {
+                const { id } = requireId(url.searchParams.get("id"));
+                sendJson(res, 200, { id, results: await discover("radio", id) });
+            }
             else sendJson(res, 404, { error: { code: "NO_ROUTE", message: "Unknown /api/yt route." } });
         } catch (err) {
             sendError(res, err, log, req);

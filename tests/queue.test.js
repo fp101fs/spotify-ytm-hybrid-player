@@ -416,3 +416,29 @@ test("index.html and script.js integrate SpotTubeQueue for universal Start Mix, 
         "espresso-sabrina-carpenter"
     );
 });
+
+test("queue.js youtube-radio mixes keep YouTube Music's order, extend in order, and end when an outside track is picked", () => {
+    const { qm } = createTestQueueManager();
+    const yt = (n) => ({ ...CATALOG[0], id: `yt-video${String(n).padStart(6, "0")}`, source: "youtube", title: `YT ${n}` });
+    const radio = [1, 2, 3, 4, 5].map(yt);
+    const catalog = [...CATALOG, ...radio];
+    const started = qm.startMix({ type: "youtube-radio", tracks: radio, label: "YT 1 Mix" }, { catalog });
+    assert.equal(started.mixSession.type, "youtube-radio");
+    assert.equal(started.currentTrack.id, radio[0].id);
+    assert.deepEqual(started.queue.map((e) => e.trackId), radio.slice(1).map((t) => t.id));
+
+    // Re-syncing on the same track (what the app does when the catalog grows) keeps the order
+    qm.setCurrentTrack(radio[0], { catalog, regenerateMix: true, recordHistory: false, silent: true });
+    assert.deepEqual(qm.getQueue().map((e) => e.trackId), radio.slice(1).map((t) => t.id));
+
+    // Advancing walks the list in order; extending appends new songs once
+    assert.equal(qm.advanceNext().id, radio[1].id);
+    const more = [6, 7, 2].map(yt);
+    assert.equal(qm.extendMix(more, { catalog: [...catalog, ...more] }), 2);
+    assert.deepEqual(qm.getQueue().map((e) => e.trackId), [3, 4, 5, 6, 7].map((n) => yt(n).id));
+
+    // Picking a library track that isn't in the radio ends it
+    qm.setCurrentTrack(CATALOG[3], { regenerateMix: true, silent: true });
+    assert.notEqual(qm.getMixSession().type, "youtube-radio");
+    assert.equal(qm.extendMix([yt(9)]), 0);
+});

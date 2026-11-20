@@ -8,6 +8,7 @@
  *   getCaptions(info, lang)          → WebVTT text
  *   search(query, { limit })         → YouTube Music songs [{ id, title, artist, duration, thumbnail }]
  *   suggest(query)                   → autocomplete strings
+ *   radio(id, { limit })             → the song's YouTube Music radio, same shape as search
  *
  * `formats` are plain objects: { itag, mimeType, container, hasAudio, hasVideo, audioCodec, videoCodec,
  * audioBitrate, bitrate, width, height, contentLength, isDrc, isLive, isHLS, raw }.
@@ -50,6 +51,23 @@ function normalizeFormat(f) {
         unusable: Boolean(f.isDrm || f.isOtf),
         raw: f,
     };
+}
+
+/** Library VideoSummary list → [{ id, title, artist, duration, thumbnail }], leaving out live/upcoming entries. */
+function summarizeSongs(list) {
+    return (list || [])
+        .filter((v) => v && v.id && !v.isLive && !v.isUpcoming)
+        .map((v) => {
+            const thumbs = (v.thumbnails || []).slice().sort((a, b) => (a.width || 0) - (b.width || 0));
+            const thumb = thumbs.find((t) => (t.width || 0) >= 96) || thumbs[thumbs.length - 1];
+            return {
+                id: v.id,
+                title: v.title || "",
+                artist: (v.author && v.author.name) || "",
+                duration: Number(v.lengthSeconds) || 0,
+                thumbnail: thumb ? thumb.url : "",
+            };
+        });
 }
 
 function createYtdlAdapter(options = {}) {
@@ -112,19 +130,14 @@ function createYtdlAdapter(options = {}) {
             const { lib, instance: y } = await ytdl();
             const type = lib.SearchType ? lib.SearchType.Song : "song";
             const list = await y.search(query, { type, limit, signal });
-            return list
-                .filter((v) => v && v.id && !v.isLive && !v.isUpcoming)
-                .map((v) => {
-                    const thumbs = (v.thumbnails || []).slice().sort((a, b) => (a.width || 0) - (b.width || 0));
-                    const thumb = thumbs.find((t) => (t.width || 0) >= 96) || thumbs[thumbs.length - 1];
-                    return {
-                        id: v.id,
-                        title: v.title || "",
-                        artist: (v.author && v.author.name) || "",
-                        duration: Number(v.lengthSeconds) || 0,
-                        thumbnail: thumb ? thumb.url : "",
-                    };
-                });
+            return summarizeSongs(list);
+        },
+
+        /** The song's YouTube Music radio (no player lookup, so no bot check), without the song itself. */
+        async radio(id, { signal, limit = 50 } = {}) {
+            const { instance: y } = await ytdl();
+            const list = await y.getRelated(id, { music: true, signal });
+            return summarizeSongs(list).filter((v) => v.id !== id).slice(0, limit);
         },
 
         /** YouTube Music autocomplete completions for `query`. */

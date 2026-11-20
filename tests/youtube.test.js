@@ -723,3 +723,21 @@ test("handler: /api/yt/search and /api/yt/suggest (cached per query)", async () 
         assert.deepStrictEqual(s.suggestions, ["stevie one", "stevie two"]);
     });
 });
+
+test("handler: /api/yt/radio returns the song's YouTube Music radio, cached per (case-sensitive) ID", async () => {
+    const adapter = fakeAdapter();
+    const calls = [];
+    adapter.radio = async (id) => {
+        calls.push(id);
+        return [{ id: "abcdefghijk", title: `After ${id}`, artist: "Next Artist", duration: 180, thumbnail: "" }];
+    };
+    const handler = Server.createYtHandler({ adapter, allowlist: ALLOWLIST, log: null });
+    await withServer(handler, async (base) => {
+        const a = await (await fetch(`${base}/api/yt/radio?id=${ID}`)).json();
+        assert.strictEqual(a.id, ID);
+        assert.strictEqual(a.results[0].title, `After ${ID}`);
+        await fetch(`${base}/api/yt/radio?id=${ID}`);
+        assert.deepStrictEqual(calls, [ID], "same ID is cached");
+        assert.strictEqual((await fetch(`${base}/api/yt/radio?id=nope`)).status, 400);
+    });
+});

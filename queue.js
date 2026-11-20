@@ -27,6 +27,7 @@
         "album",
         "mood",
         "search",
+        "youtube-radio",
         "supermix",
         "daily-mix",
         "smart-mix",
@@ -404,6 +405,25 @@
                 };
             }
 
+            // YouTube Music radio: plays `tracks` in the order YouTube Music gave them (no re-ranking)
+            if (explicitType === "youtube-radio") {
+                const ordered = (Array.isArray(seedSpec.tracks) ? seedSpec.tracks : [])
+                    .map((item) => findTrackInCatalog(catalog, item))
+                    .filter((t, i, list) => t && t.id && list.findIndex((o) => o && o.id === t.id) === i);
+                if (ordered.length > 0) {
+                    return {
+                        type: "youtube-radio",
+                        badge: seedSpec.badge || "YOUTUBE MIX",
+                        label: seedSpec.label || `${ordered[0].title} Mix`,
+                        autoplayLabel: "YouTube Music radio",
+                        seedTracks: [ordered[0]],
+                        orderedTracks: ordered,
+                        searchQuery: String(seedSpec.query || ""),
+                        moodFilter: options.moodFilter || "All",
+                    };
+                }
+            }
+
             // Active search result set / query seed
             if (
                 explicitType === "search" ||
@@ -674,6 +694,24 @@
                         ? [currentTrack]
                         : [catalog[0]];
 
+            // YouTube Music radio: the rest of its list after the current track, in order
+            if (Array.isArray(activeMixSession.orderedTracks) && activeMixSession.orderedTracks.length > 0) {
+                const ordered = activeMixSession.orderedTracks;
+                const at = currentTrack ? ordered.findIndex((t) => t.id === currentTrack.id) : -1;
+                const rest = ordered
+                    .slice(at + 1)
+                    .map((t) => findTrackInCatalog(catalog, t))
+                    .filter((t) => t && catalog.some((c) => c.id === t.id) && !excludeIds.has(String(t.id)));
+                if (rest.length > 0 || !options.fallback) {
+                    const reason = activeMixSession.label || "YouTube Music radio";
+                    const tagged = rest.map((t) => ({
+                        ...t,
+                        recommendation: { totalScore: 1, primaryReason: reason, reasons: [reason], mixMode },
+                    }));
+                    return Number.isFinite(options.limit) && options.limit > 0 ? tagged.slice(0, options.limit) : tagged;
+                }
+            }
+
             let recommended = [];
 
             if (activeRecommender && typeof activeRecommender.recommendTracks === "function") {
@@ -842,6 +880,7 @@
                 album: normalized.album || null,
                 mood: normalized.mood || null,
                 searchQuery: normalized.searchQuery || "",
+                orderedTracks: Array.isArray(normalized.orderedTracks) ? normalized.orderedTracks : null,
                 startedAt: Date.now(),
             };
 
@@ -879,6 +918,42 @@
                 currentTrack,
                 queue: getQueue(),
             };
+        }
+
+        /**
+         * Appends more tracks to the active YouTube Music radio (fetched later by the app) and queues the new ones.
+         * Returns the number of tracks added; 0 when no YouTube radio is active.
+         */
+        function extendMix(tracks = [], options = {}) {
+            if (Array.isArray(options.catalog) && options.catalog.length > 0) {
+                catalog = options.catalog.slice();
+            }
+            if (!Array.isArray(activeMixSession.orderedTracks)) return 0;
+            if (options.mixId && options.mixId !== activeMixSession.id) return 0;
+            const known = new Set(activeMixSession.orderedTracks.map((t) => t.id));
+            if (currentTrack) known.add(currentTrack.id);
+            const added = (Array.isArray(tracks) ? tracks : [])
+                .map((item) => findTrackInCatalog(catalog, item))
+                .filter((t) => {
+                    if (!t || !t.id || known.has(t.id)) return false;
+                    known.add(t.id);
+                    return true;
+                });
+            if (!added.length) return 0;
+            activeMixSession = { ...activeMixSession, orderedTracks: [...activeMixSession.orderedTracks, ...added] };
+            const queued = new Set(queue.map((item) => item.trackId));
+            const reason = activeMixSession.label || "YouTube Music radio";
+            for (const t of added) {
+                if (queued.has(t.id)) continue;
+                queue.push(
+                    createQueueEntry(t, {
+                        source: "mix",
+                        recommendation: { totalScore: 1, primaryReason: reason, reasons: [reason], mixMode },
+                    })
+                );
+            }
+            if (!options.silent) emitChange("extend-mix", { addedCount: added.length });
+            return added.length;
         }
 
         /**
@@ -1098,13 +1173,16 @@
                 }
             }
 
+            const orderedRadio = Array.isArray(activeMixSession.orderedTracks) && activeMixSession.orderedTracks.length > 0;
             let freshTracks = generateMixTracks({
                 excludeTrackIds: Array.from(existingQueueTrackIds),
+                // A YouTube radio that ran out waits for `extendMix` unless nothing is left to play
+                fallback: !orderedRadio || queue.length === 0,
             });
 
             // If catalog was exhausted (all tracks already in queue), allow cycling through
             // catalog tracks excluding only currentTrack and the last queued track so radio is truly endless!
-            if (freshTracks.length === 0 && catalog.length > 1) {
+            if (freshTracks.length === 0 && catalog.length > 1 && !orderedRadio) {
                 const tailTrackId = queue.length > 0 ? queue[queue.length - 1].trackId : null;
                 const minimalExclude = [
                     ...(currentTrack ? [currentTrack.id] : []),
@@ -1360,6 +1438,14 @@
 
             currentTrack = resolved;
 
+            // Picking a track that isn't in the YouTube radio ends that radio (back to a track radio)
+            if (
+                Array.isArray(activeMixSession.orderedTracks) &&
+                !activeMixSession.orderedTracks.some((t) => t.id === resolved.id)
+            ) {
+                activeMixSession = { ...activeMixSession, type: "track", orderedTracks: null, seedTracks: [] };
+            }
+
             if (existingIdx !== -1 && options.regenerateMix !== true) {
                 // Remove the clicked track from upcoming queue while preserving the rest of the queue
                 queue.splice(existingIdx, 1);
@@ -1512,6 +1598,7 @@
 
         return {
             startMix,
+            extendMix,
             playNext,
             addToQueue,
             removeFromQueue,

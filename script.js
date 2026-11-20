@@ -87,6 +87,7 @@ function getPlayerEngine() {
                 updatePlaybarTrackMeta(nextTrack);
                 updatePlayButtonIcon(Boolean(detail.paused));
                 syncActiveTrackUI();
+                Promise.resolve().then(maybeExtendYouTubeMix).catch(() => {});
             }
         },
         onRequestNextTrack({ shuffle, repeat }) {
@@ -389,6 +390,7 @@ const playMusic = (trackOrIndex, pause = false, options = {}) => {
     }
 
     currentTrackIndex = nextIndex;
+    Promise.resolve().then(maybeExtendYouTubeMix).catch(() => {});
 
     // Synchronize the live queue manager unless playMusic was invoked by startRadioMix or queue advance
     if (qm && !options.skipQueueSync) {
@@ -451,6 +453,14 @@ const playMusic = (trackOrIndex, pause = false, options = {}) => {
  */
 function startRadioMix(seedSpec = null, options = {}) {
     if (!songs.length) return null;
+
+    // A YouTube song's radio comes from YouTube Music itself
+    const seedTrack =
+        seedSpec && typeof seedSpec === "object" && seedSpec.type === "track" ? seedSpec.track : null;
+    if (seedTrack && isYouTubeTrack(seedTrack) && ytApiState.status !== "missing" && !options.localOnly) {
+        startYouTubeMix(seedTrack, options);
+        return { currentTrack: seedTrack, queue: [], pending: true };
+    }
 
     const qm = getQueueManager();
     if (options.openDrawer !== false) {
@@ -3312,7 +3322,7 @@ function buildOmniSearchResults(queryInput, options = {}) {
             (track.language && track.language.toLowerCase() === moodFilter.toLowerCase())
         );
     });
-    const basePool = moodFilteredPool.length > 0 ? moodFilteredPool : songs;
+    const basePool = (moodFilteredPool.length > 0 ? moodFilteredPool : songs).filter((t) => !t.ytEphemeral);
 
     // 1. Score & filter Songs
     const matchedSongs = [];
@@ -4542,6 +4552,15 @@ function startSearchMix(queryOrOptions, options = {}) {
     });
     activeSearchResults = results;
 
+    // Nothing in the library matches (or only YouTube songs do): mix from YouTube Music's top result instead
+    if (targetQuery && !(Array.isArray(mixOptions.tracks) && mixOptions.tracks.length) && !mixOptions.localOnly) {
+        const libraryMatches = results.songs.filter((t) => !isYouTubeTrack(t));
+        if (!libraryMatches.length && ytApiState.status !== "missing") {
+            startYouTubeSearchMix(targetQuery, results, mixOptions);
+            return { currentTrack: null, queue: [], pending: true };
+        }
+    }
+
     if (targetQuery) {
         const seedTracks =
             Array.isArray(mixOptions.tracks) && mixOptions.tracks.length > 0
@@ -4563,6 +4582,23 @@ function startSearchMix(queryOrOptions, options = {}) {
         return startRadioMix({ type: "mood", mood: activeMoodFilter }, mixOptions);
     }
     return startRadioMix({ type: "supermix" }, mixOptions);
+}
+
+/** `Start "query" Mix` with no library match: YouTube Music's top song for the query seeds a YouTube mix. */
+async function startYouTubeSearchMix(query, results, options = {}) {
+    const key = String(query || "").trim();
+    let top = ytSearch.query === key && ytSearch.results.length ? ytSearch.results[0] : null;
+    if (!top) {
+        announceQueueStatus(`Searching YouTube Music for “${key}”…`);
+        if (ytSearch.timer) clearTimeout(ytSearch.timer);
+        await runYouTubeSearch(key);
+        top = ytSearch.query === key && ytSearch.results.length ? ytSearch.results[0] : null;
+    }
+    if (top) return startYouTubeMix(top, { ...options, query: key });
+    // YouTube had nothing either: fall back to the library's own search radio
+    const localMatch = (results && results.songs.find((t) => isYouTubeTrack(t))) || null;
+    if (localMatch) return startYouTubeMix(localMatch, { ...options, query: key });
+    return startSearchMix(key, { ...options, localOnly: true });
 }
 
 function playTopSearchResult() {
@@ -9568,7 +9604,7 @@ async function lookupYouTubeDetails(track) {
 }
 
 function getYouTubeTracks() {
-    return songs.filter((t) => t && t.source === "youtube");
+    return songs.filter((t) => t && t.source === "youtube" && !t.ytEphemeral);
 }
 
 /** Called from getSongs(): reads yt-allowlist.json and adds the videos this browser added before. */
@@ -9661,6 +9697,17 @@ function addYouTubeVideo(input, options = {}) {
     const id = YT.parseYouTubeId(String(input || ""));
     if (!id) return { status: "invalid", message: YT.describeYtError("INVALID_ID") };
     const existing = songs.find((t) => t.youtubeId === id && t.source === "youtube");
+    if (existing && existing.ytEphemeral) {
+        // Heard in a YouTube mix only: saving it now makes it a library video
+        delete existing.ytEphemeral;
+        setAddedYouTubeIds([...getAddedYouTubeIds(), id]);
+        setYouTubeVideoMeta(id, { title: existing.title, artist: existing.artistDisplay, channel: existing.artistDisplay, duration: existing.duration });
+        if (!options.skipRefresh) {
+            refreshLibraryViews();
+            updateYouTubeCount();
+        }
+        return { status: "added", track: existing, message: `Added “${existing.title}” by ${existing.artistDisplay}.` };
+    }
     if (existing) return { status: "exists", track: existing, message: `“${existing.title}” is already in YouTube videos.` };
     const suggested = findAllowlistEntry(id);
     const known = options.info && options.info.title ? options.info : null; // details already in hand (search)
@@ -10279,15 +10326,144 @@ function handleYouTubeSearchMenu(action) {
     closeYouTubeSearchMenu();
     if (!r) return;
     if (action === "play") playYouTubeSearchResult(index);
+    else if (action === "mix") startYouTubeMix(r);
     else if (action === "queue") {
         const track = trackForYouTubeResult(r);
         if (track) playTrackNext(track.id);
     } else if (action === "add") {
-        const existed = songs.some((t) => t.source === "youtube" && t.youtubeId === r.id);
+        const existed = songs.some((t) => t.source === "youtube" && t.youtubeId === r.id && !t.ytEphemeral);
         trackForYouTubeResult(r);
         showLibraryToast(existed ? `“${r.title}” is already in YouTube videos.` : `Added “${r.title}” to YouTube videos.`);
     }
     if (back && typeof back.focus === "function") back.focus();
+}
+
+// --- YouTube Music radio mixes ("Start mix" from a search result or any YouTube track) ---
+
+const ytMix = { token: 0, mixId: null, loading: false, extendedFrom: new Set() };
+
+/**
+ * The catalog track for a YouTube result. Songs that aren't in YouTube videos yet join the catalog for this
+ * session only (`ytEphemeral`), so a 50-song radio doesn't fill the library; "Add to YouTube videos" keeps one.
+ */
+function ensureYouTubeMixTrack(r) {
+    const YT = getYouTubeModule();
+    if (!YT || !r) return null;
+    const id = YT.parseYouTubeId(String(r.id || r.youtubeId || ""));
+    if (!id) return null;
+    const existing = songs.find((t) => t.source === "youtube" && t.youtubeId === id);
+    if (existing) return existing;
+    const track = YT.buildYouTubeTrack(YT.entryFromInfo(id, { title: r.title, artist: r.artist, channel: r.artist, duration: r.duration }));
+    if (r.thumbnail) track.coverUrl = r.thumbnail;
+    track.ytEphemeral = true;
+    songs.push(track);
+    return track;
+}
+
+async function fetchYouTubeRadio(youtubeId) {
+    const res = await fetch(`./api/yt/radio?id=${encodeURIComponent(youtubeId)}`);
+    const type = res.headers && typeof res.headers.get === "function" ? res.headers.get("content-type") || "" : "";
+    if (!/json/.test(type)) throw Object.assign(new Error("no server"), { code: "NO_SERVER" });
+    const body = await res.json();
+    if (!res.ok) throw Object.assign(new Error("radio failed"), { code: (body && body.error && body.error.code) || "UPSTREAM" });
+    return Array.isArray(body.results) ? body.results : [];
+}
+
+function isYouTubeMixActive() {
+    const qm = getQueueManager();
+    const session = qm && typeof qm.getMixSession === "function" ? qm.getMixSession() : null;
+    return Boolean(session && session.type === "youtube-radio" && session.id === ytMix.mixId);
+}
+
+/**
+ * Starts a nonstop YouTube Music radio from a search result `{ id, title, artist, duration, thumbnail }` or a
+ * YouTube catalog track: the song plays at once, then YouTube Music's radio for it fills Up Next in its order.
+ */
+async function startYouTubeMix(seed, options = {}) {
+    const YT = getYouTubeModule();
+    if (!YT || !seed) return null;
+    const seedTrack = isYouTubeTrack(seed) ? seed : ensureYouTubeMixTrack(seed);
+    if (!seedTrack) return null;
+    if (ytApiState.status === "missing") {
+        handleYouTubePlaybackError(seedTrack);
+        return null;
+    }
+    const token = ++ytMix.token;
+    ytMix.mixId = null;
+    ytMix.extendedFrom = new Set([seedTrack.youtubeId]);
+    const label = options.query ? `“${options.query}” Mix` : `${seedTrack.title} Mix`;
+    renderYouTubeSuggest([]);
+    ytFailedTrackIds.delete(seedTrack.id);
+    if (options.openDrawer !== false) {
+        toggleRightDrawer(true);
+        switchDrawerTab("up-next");
+    }
+    const current = songs[currentTrackIndex];
+    if (!current || current.id !== seedTrack.id || !activePlaybackTrackId) {
+        ytVideoWanted = !isYouTubeAudioOnly();
+        playMusic(seedTrack.id, false);
+    }
+    announceQueueStatus(`Building ${label} from YouTube Music…`);
+    ytMix.loading = true;
+    let radio = [];
+    let failure = null;
+    try {
+        radio = await fetchYouTubeRadio(seedTrack.youtubeId);
+    } catch (err) {
+        failure = (err && err.code) || "UPSTREAM";
+    } finally {
+        if (token === ytMix.token) ytMix.loading = false;
+    }
+    if (token !== ytMix.token) return null; // another mix started meanwhile
+    const now = songs[currentTrackIndex];
+    if (!now || now.id !== seedTrack.id) return null; // the listener moved on; don't hijack their queue
+    if (failure || !radio.length) {
+        if (failure === "NO_SERVER") setYouTubeApiStatus("missing");
+        showLibraryToast(`Couldn't get YouTube Music's radio for “${seedTrack.title}”, so Up Next uses this app's own picks.`, { error: true });
+        return null;
+    }
+    const tracks = radio.map(ensureYouTubeMixTrack).filter(Boolean);
+    const qm = getQueueManager();
+    if (!qm || typeof qm.startMix !== "function") return null;
+    const result = qm.startMix(
+        { type: "youtube-radio", tracks: [seedTrack, ...tracks], label, query: options.query || "" },
+        { catalog: getQueueCatalog(), startTrack: seedTrack, preserveManual: true }
+    );
+    ytMix.mixId = result && result.mixSession ? result.mixSession.id : null;
+    renderDrawerNowPlaying(seedTrack);
+    renderDrawerQueue();
+    announceQueueStatus(`Started ${label}: ${result.queue.length} songs from YouTube Music radio`);
+    return result;
+}
+
+/** Keeps a YouTube mix endless: when Up Next runs low, adds the radio of a song further down the mix. */
+async function maybeExtendYouTubeMix() {
+    if (ytMix.loading || !isYouTubeMixActive()) return false;
+    const qm = getQueueManager();
+    const upcoming = qm.getQueue().filter((e) => e.source === "mix");
+    if (upcoming.length >= 8) return false;
+    const session = qm.getMixSession();
+    const ordered = Array.isArray(session.orderedTracks) ? session.orderedTracks : [];
+    const from = [songs[currentTrackIndex], ...ordered.slice().reverse()].find(
+        (t) => t && isYouTubeTrack(t) && !ytMix.extendedFrom.has(t.youtubeId)
+    );
+    if (!from) return false;
+    ytMix.extendedFrom.add(from.youtubeId);
+    const token = ytMix.token;
+    const mixId = ytMix.mixId;
+    ytMix.loading = true;
+    try {
+        const radio = await fetchYouTubeRadio(from.youtubeId);
+        if (token !== ytMix.token || !isYouTubeMixActive()) return false;
+        const tracks = radio.map(ensureYouTubeMixTrack).filter(Boolean);
+        const added = qm.extendMix(tracks, { catalog: getQueueCatalog(), mixId, silent: true });
+        if (added) renderDrawerQueue();
+        return added > 0;
+    } catch (_) {
+        return false;
+    } finally {
+        if (token === ytMix.token) ytMix.loading = false;
+    }
 }
 
 // --- autocomplete ---
@@ -10824,6 +11000,8 @@ window.SpotTubeShell = {
     setSearchQuery,
     setSearchCategory,
     startSearchMix,
+    startYouTubeMix,
+    maybeExtendYouTubeMix,
     playTopSearchResult,
     buildSupermixData,
     buildDailyMixes,
