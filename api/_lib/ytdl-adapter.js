@@ -53,6 +53,17 @@ function normalizeFormat(f) {
     };
 }
 
+function cleanArtist(name) {
+    return String(name || "").replace(/ - Topic$/, "").trim();
+}
+
+/** True when two artist credits ("A, B & C") name a common artist. */
+function sharesArtist(a, b) {
+    const split = (x) => String(x || "").toLowerCase().split(/\s*(?:,|&|\band\b|\bfeat\.?|\bx\b)\s*/).map((t) => t.trim()).filter(Boolean);
+    const left = new Set(split(a));
+    return split(b).some((t) => left.has(t));
+}
+
 /** Library VideoSummary list → [{ id, title, artist, duration, thumbnail }], leaving out live/upcoming entries. */
 function summarizeSongs(list) {
     return (list || [])
@@ -133,11 +144,43 @@ function createYtdlAdapter(options = {}) {
             return summarizeSongs(list);
         },
 
-        /** The song's YouTube Music radio (no player lookup, so no bot check), without the song itself. */
-        async radio(id, { signal, limit = 50 } = {}) {
-            const { instance: y } = await ytdl();
-            const list = await y.getRelated(id, { music: true, signal });
-            return summarizeSongs(list).filter((v) => v.id !== id).slice(0, limit);
+        /**
+         * The song's YouTube Music radio (no player lookup, so no bot check), without the song itself.
+         * From some server IPs (Vercel) YouTube Music answers with a generic radio unrelated to the song; when none
+         * of it shares the song's artist, the mix is built from the artist's songs plus related "- Topic" songs.
+         */
+        async radio(id, { signal, limit = 50, force } = {}) {
+            const { lib, instance: y } = await ytdl();
+            const [song, music] = await Promise.all([
+                y.getSong(id, { signal }).catch(() => null),
+                y.getRelated(id, { music: true, signal }).then(summarizeSongs).catch(() => []),
+            ]);
+            const artist = cleanArtist(song && song.author && song.author.name);
+            const radio = music.filter((v) => v.id !== id);
+            if (force !== "fallback" && radio.length && (!artist || radio.some((v) => sharesArtist(v.artist, artist)))) {
+                return radio.slice(0, limit);
+            }
+            if (!artist) return radio.slice(0, limit);
+            const type = lib.SearchType ? lib.SearchType.Song : "song";
+            const [byArtist, related] = await Promise.all([
+                y.search(artist, { type, limit: 20, signal }).then(summarizeSongs).catch(() => []),
+                y.getRelated(id, { signal }).then(summarizeSongs).catch(() => []),
+            ]);
+            // Plain related videos include essays and full albums: keep auto-generated "Artist - Topic" songs only
+            const songs = related
+                .filter((v) => / - Topic$/.test(v.artist) && v.duration >= 60 && v.duration <= 600)
+                .map((v) => ({ ...v, artist: cleanArtist(v.artist) }));
+            const out = [];
+            const seen = new Set([id]);
+            for (let i = 0; out.length < limit && (i < byArtist.length || i < songs.length); i++) {
+                for (const v of [byArtist[i], songs[i]]) {
+                    if (v && !seen.has(v.id)) {
+                        seen.add(v.id);
+                        out.push(v);
+                    }
+                }
+            }
+            return out.length ? out.slice(0, limit) : radio.slice(0, limit);
         },
 
         /** YouTube Music autocomplete completions for `query`. */
