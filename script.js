@@ -598,12 +598,19 @@ function playNextFromQueue(options = {}) {
         ensureQueueCatalogSynced();
         const nextTrack = qm.advanceNext(options);
         if (nextTrack) {
-            playMusic(nextTrack.id, Boolean(options.pause), { skipQueueSync: true });
+            playMusic(nextTrack.id, Boolean(options.pause), {
+                skipQueueSync: true,
+                useStandbyDeck: Boolean(options.useStandbyDeck),
+                skipTelemetryOutcome: Boolean(options.skipTelemetryOutcome),
+            });
             return nextTrack;
         }
     }
     const nextIndex = (currentTrackIndex + 1) % songs.length;
-    playMusic(nextIndex, Boolean(options.pause));
+    playMusic(nextIndex, Boolean(options.pause), {
+        useStandbyDeck: Boolean(options.useStandbyDeck),
+        skipTelemetryOutcome: Boolean(options.skipTelemetryOutcome),
+    });
     return songs[nextIndex];
 }
 
@@ -6949,7 +6956,7 @@ async function main() {
     const store = getStorage();
     const pe = getPlayerEngine();
 
-    if (store && typeof store.attachAudioAnalyzer === "function") {
+    if (!pe && store && typeof store.attachAudioAnalyzer === "function") {
         store.attachAudioAnalyzer(currentSong, {
             getActiveTrackId: () => songs[currentTrackIndex]?.id || null,
         });

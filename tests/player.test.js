@@ -240,10 +240,13 @@ test("player.js performs dual-deck Web Audio crossfade transitions, gapless stan
     const espressoStats = storage.getTrackStats(firstTrack.id);
     assert.equal(espressoStats.fullCompletions, 1);
 
-    // 4. Step the crossfade curve through 50% and 100% and verify both HTML5 volume and Web Audio GainNodes ramp
+    // 4. Step the crossfade curve through 50% and 100% and verify Web Audio GainNodes ramp
+    //    while the underlying HTMLAudioElements remain unmuted at unity gain (no gain^2 double-attenuation
+    //    and no deck.volume = 0 starving Web Audio MediaElementAudioSourceNode capture)
     const gainsAtHalf = player.stepCrossfade(0.5);
-    assert.ok(Math.abs(deckA.volume - gainsAtHalf.outgoingGain) < 0.01);
-    assert.ok(Math.abs(deckB.volume - gainsAtHalf.incomingGain) < 0.01);
+    assert.equal(deckA.volume, 1, "Web Audio-bound Deck A must stay at unity element volume");
+    assert.equal(deckB.volume, 1, "Web Audio-bound Deck B must stay at unity element volume");
+    assert.equal(deckB.muted, false, "Incoming Deck B must remain unmuted");
 
     const webAudioGains = MockAudioCtx.getCreatedGains();
     assert.equal(webAudioGains.length, 2, "Web Audio graph must create GainNode A and GainNode B");
@@ -255,8 +258,10 @@ test("player.js performs dual-deck Web Audio crossfade transitions, gapless stan
     assert.equal(player.getState().crossfadeState.active, false);
     assert.equal(player.getState().activeDeckKey, "B");
     assert.equal(deckA.paused, true, "Outgoing Deck A must pause when crossfade completes");
-    assert.equal(deckA.volume, 0);
+    assert.equal(webAudioGains[0].gain.value, 0);
+    assert.equal(webAudioGains[1].gain.value, 1);
     assert.equal(deckB.volume, 1);
+    assert.equal(deckB.muted, false);
 
     // 5. Verify automatic endless queue replenishment when fewer than 3 tracks remain
     while (qm.getQueue().length > 2) {
@@ -574,4 +579,141 @@ test("index.html and script.js integrate SpotTubePlayer for crossfade UI, keyboa
     });
     assert.equal(shell.getState().isShortcutsModalOpen, true);
     assert.equal(elementsById.get("shortcuts-modal").hidden, false);
+});
+
+test("crossfade never mutes incoming deck: lazy source binding, AudioContext resume, HTML5 fallback, relative URL preload stability, and UI error resilience", async () => {
+    // 1. Lazy createMediaElementSource binding + suspended AudioContext resume + no double-attenuation at < 100% volume
+    const boundSources = [];
+    let resumeCalls = 0;
+    const createdGains = [];
+    class StrictAudioContext {
+        constructor() {
+            this.state = "suspended";
+            this.currentTime = 0;
+            this.destination = { nodeType: "destination" };
+        }
+        resume() {
+            resumeCalls++;
+            this.state = "running";
+            return Promise.resolve();
+        }
+        createGain() {
+            const g = { gain: { value: 1 }, connect() {} };
+            createdGains.push(g);
+            return g;
+        }
+        createAnalyser() {
+            return { fftSize: 512, smoothingTimeConstant: 0.8, connect() {} };
+        }
+        createMediaElementSource(el) {
+            assert.ok(el.src, `createMediaElementSource must not bind ${el.name} while src is empty`);
+            boundSources.push({ name: el.name, src: el.src });
+            return { mediaElement: el, connect() {} };
+        }
+    }
+
+    const env1 = createTestPlayerEnvironment({
+        crossfadeSeconds: 4,
+        volume: 0.5,
+        AudioContext: StrictAudioContext,
+    });
+    env1.qm.startMix("espresso-sabrina-carpenter");
+    const t1 = env1.qm.getCurrentTrack();
+    const t2 = env1.qm.getQueue()[0].track;
+
+    env1.player.loadAndPlayTrack(t1, { autoplay: true });
+    assert.equal(boundSources.length, 1, "Only active Deck A should bind MediaElementSource on initial track play");
+    assert.equal(boundSources[0].name, "deckA");
+    assert.equal(env1.deckA.volume, 1, "Deck A stays at unity element volume under Web Audio");
+    assert.equal(createdGains[0].gain.value, 0.5, "GainNode A reflects master volume 0.5 without squaring");
+
+    // Simulate AudioContext being suspended before crossfade starts
+    env1.player.beginCrossfade(t2, { durationSeconds: 4, manualStep: true });
+    assert.equal(boundSources.length, 2, "Deck B binds MediaElementSource only after src is set for crossfade");
+    assert.equal(boundSources[1].name, "deckB");
+    assert.ok(resumeCalls >= 1, "AudioContext.resume() must be called when starting crossfade");
+    assert.equal(env1.deckB.volume, 1, "Incoming Deck B must keep unity element volume at crossfade start (not 0)");
+    assert.equal(env1.deckB.muted, false, "Incoming Deck B must never be muted");
+    assert.equal(createdGains[1].gain.value, 0, "GainNode B starts at 0 before ramping up");
+
+    env1.player.stepCrossfade(1.0);
+    assert.equal(env1.deckB.volume, 1);
+    assert.equal(env1.deckB.muted, false);
+    assert.equal(createdGains[1].gain.value, 0.5, "Incoming Deck B reaches full master volume 0.5 at completion");
+
+    // 2. HTML5 deck.volume fallback (no AudioContext) smoothly ramps incoming Deck B to 1.0
+    const envFallback = createTestPlayerEnvironment({
+        crossfadeSeconds: 4,
+        AudioContext: null,
+    });
+    envFallback.qm.startMix("espresso-sabrina-carpenter");
+    envFallback.player.loadAndPlayTrack(envFallback.qm.getCurrentTrack(), { autoplay: true });
+    const nextTrackFallback = envFallback.qm.getQueue()[0].track;
+    envFallback.player.beginCrossfade(nextTrackFallback, { durationSeconds: 4, manualStep: true });
+    assert.equal(envFallback.deckB.volume, 0);
+    const half = envFallback.player.stepCrossfade(0.5);
+    assert.ok(Math.abs(envFallback.deckA.volume - half.outgoingGain) < 0.01);
+    assert.ok(Math.abs(envFallback.deckB.volume - half.incomingGain) < 0.01);
+    envFallback.player.stepCrossfade(1.0);
+    assert.equal(envFallback.deckA.volume, 0);
+    assert.equal(envFallback.deckB.volume, 1);
+    assert.equal(envFallback.deckB.muted, false);
+
+    // 3. Relative track.audioUrl vs browser-resolved absolute deck.src must NOT repeatedly reload standby deck
+    const makeBrowserLikeAudio = (name) => {
+        const base = createMockAudio(name);
+        let rawSrc = "";
+        let srcSetCount = 0;
+        Object.defineProperty(base, "src", {
+            get() {
+                return rawSrc;
+            },
+            set(val) {
+                srcSetCount++;
+                rawSrc = val ? new URL(val, "http://127.0.0.1:5500/").href : "";
+            },
+            enumerable: true,
+        });
+        base.getSrcSetCount = () => srcSetCount;
+        return base;
+    };
+    const browserDeckA = makeBrowserLikeAudio("browserDeckA");
+    const browserDeckB = makeBrowserLikeAudio("browserDeckB");
+    const envRel = createTestPlayerEnvironment({
+        primaryAudio: browserDeckA,
+        secondaryAudio: browserDeckB,
+        crossfadeSeconds: 4,
+    });
+    envRel.qm.startMix("espresso-sabrina-carpenter");
+    envRel.player.loadAndPlayTrack(envRel.qm.getCurrentTrack(), { autoplay: true });
+    assert.equal(browserDeckB.loadCalls, 1, "Standby Deck B should preload once");
+    assert.equal(browserDeckB.getSrcSetCount(), 1);
+    for (let t = 10; t <= 100; t += 10) {
+        envRel.player.evaluatePlaybackTick(t, 180);
+    }
+    assert.equal(browserDeckB.loadCalls, 1, "Repeated timeupdate ticks must not abort & reload standby Deck B");
+    assert.equal(browserDeckB.getSrcSetCount(), 1, "Standby Deck B src must not be reassigned on each tick");
+
+    // Triggering crossfade must reuse preloaded Deck B without resetting src
+    const tick = envRel.player.evaluatePlaybackTick(177, 180);
+    assert.equal(tick.action, "crossfade");
+    assert.equal(browserDeckB.getSrcSetCount(), 1, "beginCrossfade must preserve preloaded Deck B buffer");
+    envRel.player.cancelActiveCrossfade(true);
+
+    // 4. Even if options.onTrackChange throws during beginCrossfade, crossfade timer still ramps Deck B to 1.0
+    const envThrow = createTestPlayerEnvironment({
+        crossfadeSeconds: 1,
+        AudioContext: null,
+        onTrackChange(_track, detail) {
+            if (detail.crossfading) throw new Error("Simulated UI failure");
+        },
+    });
+    envThrow.qm.startMix("espresso-sabrina-carpenter");
+    envThrow.player.loadAndPlayTrack(envThrow.qm.getCurrentTrack(), { autoplay: true });
+    const incomingThrowTrack = envThrow.qm.getQueue()[0].track;
+    envThrow.player.beginCrossfade(incomingThrowTrack, { durationSeconds: 0.15 });
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(envThrow.player.getState().crossfadeState.active, false, "Crossfade must complete despite onTrackChange error");
+    assert.equal(envThrow.deckB.volume, 1, "Incoming Deck B must reach full volume 1.0 even if onTrackChange throws");
+    assert.equal(envThrow.deckB.muted, false);
 });

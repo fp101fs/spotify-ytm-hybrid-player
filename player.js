@@ -173,11 +173,15 @@
 
         // Web Audio API dual-deck graph state
         let audioCtx = null;
+        let sourceNodeA = null;
+        let sourceNodeB = null;
         let gainNodeA = null;
         let gainNodeB = null;
         let analyserNode = null;
         let webAudioInitialized = false;
         let webAudioSupported = false;
+        const deckWebAudioBound = { A: false, B: false };
+        let pendingCrossfadeTrackId = null;
 
         const listeners = new Set();
 
@@ -204,9 +208,67 @@
             return deckKey === "A" ? gainNodeA : gainNodeB;
         }
 
+        function resolveAbsoluteUrl(url) {
+            if (!url || typeof url !== "string") return "";
+            try {
+                const base =
+                    globalScope && globalScope.location && globalScope.location.href
+                        ? globalScope.location.href
+                        : null;
+                return base ? new URL(url, base).href : url;
+            } catch (_) {
+                return url;
+            }
+        }
+
+        function isDeckLoadedWithUrl(deck, audioUrl) {
+            if (!deck || !audioUrl) return false;
+            if (deck.src === audioUrl) return true;
+            if (deck.dataset && deck.dataset.loadedAudioUrl === audioUrl && deck.src) return true;
+            const resolved = resolveAbsoluteUrl(audioUrl);
+            return Boolean(resolved && deck.src === resolved);
+        }
+
+        function setDeckSource(deck, track) {
+            if (!deck || !track || !track.audioUrl) return false;
+            const changed = !isDeckLoadedWithUrl(deck, track.audioUrl);
+            if (changed) {
+                deck.src = track.audioUrl;
+            }
+            if (deck.dataset) {
+                deck.dataset.trackId = track.id || "";
+                deck.dataset.loadedAudioUrl = track.audioUrl;
+            }
+            return changed;
+        }
+
+        function isSafariWebKit() {
+            // Respect explicit AudioContext injection (e.g. tests or custom hosts)
+            if (options.AudioContext) return false;
+            const nav = globalScope && globalScope.navigator;
+            const ua = String((nav && nav.userAgent) || "");
+            return /Safari/i.test(ua) && !/Chrome|Chromium|CriOS|Edg|OPR|Firefox|FxiOS/i.test(ua);
+        }
+
+        function resumeAudioContextIfNeeded() {
+            if (audioCtx && audioCtx.state === "suspended" && typeof audioCtx.resume === "function") {
+                try {
+                    const p = audioCtx.resume();
+                    if (p && typeof p.catch === "function") p.catch(() => {});
+                } catch (_) {}
+            }
+        }
+
         function initWebAudioGraph() {
             if (webAudioInitialized) return webAudioSupported;
             webAudioInitialized = true;
+
+            // WebKit/Safari frequently silences MediaElementAudioSourceNode when an <audio>
+            // element's src is assigned or swapped after binding; use native HTML5 deck volume there.
+            if (isSafariWebKit()) {
+                webAudioSupported = false;
+                return false;
+            }
 
             const AudioCtx =
                 options.AudioContext ||
@@ -224,11 +286,6 @@
                 analyserNode.fftSize = 512;
                 analyserNode.smoothingTimeConstant = 0.8;
 
-                const sourceA = audioCtx.createMediaElementSource(deckA);
-                const sourceB = audioCtx.createMediaElementSource(deckB);
-
-                sourceA.connect(gainNodeA);
-                sourceB.connect(gainNodeB);
                 gainNodeA.connect(analyserNode);
                 gainNodeB.connect(analyserNode);
                 analyserNode.connect(audioCtx.destination);
@@ -236,9 +293,34 @@
                 webAudioSupported = true;
                 return true;
             } catch (_) {
-                // If MediaElementSource was already bound (e.g. by storage.attachAudioAnalyzer),
-                // fall back cleanly to HTML5 Audio element volume crossfading.
                 webAudioSupported = false;
+                return false;
+            }
+        }
+
+        /**
+         * Lazily binds a deck's HTMLAudioElement to its Web Audio GainNode only after the deck
+         * has a source URL loaded, keeping a strong reference to the MediaElementAudioSourceNode
+         * so it cannot be garbage-collected while idle.
+         */
+        function ensureDeckWebAudioSource(deckKey) {
+            if (!webAudioSupported || !audioCtx) return false;
+            if (deckWebAudioBound[deckKey]) return true;
+
+            const deck = deckKey === "A" ? deckA : deckB;
+            const gainNode = getDeckGainNode(deckKey);
+            if (!deck || !deck.src || !gainNode) return false;
+
+            try {
+                const source = audioCtx.createMediaElementSource(deck);
+                source.connect(gainNode);
+                if (deckKey === "A") sourceNodeA = source;
+                else sourceNodeB = source;
+                deckWebAudioBound[deckKey] = true;
+                return true;
+            } catch (_) {
+                // If MediaElementSource was already bound elsewhere, keep this deck on HTML5 volume fallback.
+                deckWebAudioBound[deckKey] = false;
                 return false;
             }
         }
@@ -248,14 +330,29 @@
             const clampedGain = clamp(gainMultiplier, 0, 1);
             const effectiveVolume = isMuted ? 0 : roundTo(clamp(masterVolume * clampedGain, 0, 1));
 
-            deck.muted = isMuted;
-            deck.volume = effectiveVolume;
-
-            if (webAudioSupported) {
+            if (webAudioSupported && deckWebAudioBound[deckKey]) {
+                // Keep the underlying HTMLAudioElement unmuted at unity gain so it always feeds a
+                // full-scale signal into MediaElementAudioSourceNode; GainNode exclusively controls level.
+                // Setting deck.volume = 0 on a Web Audio-captured element double-attenuates (gain^2)
+                // and can silence or starve audio capture during crossfade fade-in.
+                deck.muted = false;
+                deck.volume = 1;
                 const gainNode = getDeckGainNode(deckKey);
                 if (gainNode && gainNode.gain) {
+                    if (
+                        typeof gainNode.gain.cancelScheduledValues === "function" &&
+                        audioCtx &&
+                        Number.isFinite(audioCtx.currentTime)
+                    ) {
+                        try {
+                            gainNode.gain.cancelScheduledValues(audioCtx.currentTime);
+                        } catch (_) {}
+                    }
                     gainNode.gain.value = effectiveVolume;
                 }
+            } else {
+                deck.muted = isMuted;
+                deck.volume = effectiveVolume;
             }
         }
 
@@ -263,7 +360,7 @@
          * Ensures the queue manager always has at least `minQueueSize` (3) upcoming tracks
          * for endless nonstop playback.
          */
-        function ensureEndlessQueue() {
+        function ensureEndlessQueue(ensureOptions = {}) {
             const qm =
                 typeof options.getQueueManager === "function"
                     ? options.getQueueManager()
@@ -279,7 +376,7 @@
             const refreshed = qm.getUpcomingTracks ? qm.getUpcomingTracks() : qm.getQueue();
 
             // Gaplessly preload the very next track on the standby deck when not actively crossfading
-            if (!crossfadeState.active && refreshed.length > 0) {
+            if (!ensureOptions.skipPreload && !crossfadeState.active && refreshed.length > 0) {
                 const nextCandidate = refreshed[0].track || refreshed[0];
                 preloadNextTrack(nextCandidate);
             }
@@ -333,12 +430,8 @@
             if (crossfadeState.active) return preloadedTrack;
 
             const standby = getStandbyDeck();
-            if (standby.src !== nextTrack.audioUrl) {
-                standby.src = nextTrack.audioUrl;
+            if (setDeckSource(standby, nextTrack)) {
                 standby.currentTime = 0;
-                if (standby.dataset) {
-                    standby.dataset.trackId = nextTrack.id || "";
-                }
                 if (typeof standby.load === "function") {
                     try {
                         standby.load();
@@ -457,9 +550,25 @@
         function beginCrossfade(nextTrack, optionsOverride = {}) {
             if (!nextTrack) return null;
             if (needsResolvedUrl(nextTrack)) {
-                resolveTrackUrlThen(nextTrack, () => beginCrossfade(nextTrack, optionsOverride), { reason: "crossfade" });
+                const pendingKey = nextTrack.id || "__pending__";
+                pendingCrossfadeTrackId = pendingKey;
+                resolveTrackUrlThen(
+                    nextTrack,
+                    () => {
+                        if (pendingCrossfadeTrackId === pendingKey) {
+                            pendingCrossfadeTrackId = null;
+                        }
+                        return beginCrossfade(nextTrack, optionsOverride);
+                    },
+                    { reason: "crossfade" }
+                ).then((res) => {
+                    if (!res && pendingCrossfadeTrackId === pendingKey) {
+                        pendingCrossfadeTrackId = null;
+                    }
+                });
                 return null;
             }
+            pendingCrossfadeTrackId = null;
 
             const fadeDuration = clamp(
                 Number(optionsOverride.durationSeconds ?? crossfadeSeconds),
@@ -480,21 +589,23 @@
                 completeCrossfade();
             }
 
-            initWebAudioGraph();
-
             const fromKey = activeDeckKey;
             const toKey = activeDeckKey === "A" ? "B" : "A";
             const outgoingDeck = fromKey === "A" ? deckA : deckB;
             const incomingDeck = toKey === "A" ? deckA : deckB;
             const outgoingTrack = activeTrack;
 
-            if (incomingDeck.src !== nextTrack.audioUrl) {
-                incomingDeck.src = nextTrack.audioUrl;
+            const srcChanged = setDeckSource(incomingDeck, nextTrack);
+            if (srcChanged || Number(incomingDeck.currentTime || 0) !== 0) {
+                incomingDeck.currentTime = 0;
             }
-            incomingDeck.currentTime = 0;
-            if (incomingDeck.dataset) {
-                incomingDeck.dataset.trackId = nextTrack.id || "";
-            }
+
+            // Initialize Web Audio after incomingDeck.src is set so createMediaElementSource
+            // is never bound to an empty-src deck, and resume a suspended AudioContext.
+            initWebAudioGraph();
+            ensureDeckWebAudioSource(fromKey);
+            ensureDeckWebAudioSource(toKey);
+            resumeAudioContextIfNeeded();
 
             // Record natural completion telemetry for the outgoing track as it enters crossfade
             if (storage && outgoingTrack && typeof storage.recordPlaybackOutcome === "function") {
@@ -535,25 +646,31 @@
 
             const playPromise = incomingDeck.play();
             if (playPromise && typeof playPromise.catch === "function") {
-                playPromise.catch(() => {});
-            }
-
-            if (typeof options.onTrackChange === "function") {
-                options.onTrackChange(nextTrack, {
-                    previousTrack: outgoingTrack,
-                    activeDeck: getActiveDeck(),
-                    activeDeckKey,
-                    crossfading: true,
-                    crossfadeDuration: fadeDuration,
+                playPromise.catch((err) => {
+                    // Retry once on canplay if an overlapping preload load() caused an AbortError
+                    if (
+                        err &&
+                        err.name === "AbortError" &&
+                        typeof incomingDeck.addEventListener === "function"
+                    ) {
+                        const retryPlay = () => {
+                            if (typeof incomingDeck.removeEventListener === "function") {
+                                incomingDeck.removeEventListener("canplay", retryPlay);
+                            }
+                            if (activeDeckKey === toKey && activeTrack && activeTrack.id === nextTrack.id) {
+                                const retry = incomingDeck.play();
+                                if (retry && typeof retry.catch === "function") retry.catch(() => {});
+                            }
+                        };
+                        incomingDeck.addEventListener("canplay", retryPlay);
+                    }
                 });
             }
 
-            syncMediaSession(nextTrack, "playing");
-            ensureEndlessQueue();
-
-            // Drive automatic crossfade curve timer in browser/runtime unless manual stepping is requested
+            // Start the automatic crossfade curve timer BEFORE notifying UI listeners so an
+            // exception in a UI callback can never leave the incoming deck stranded at gain 0.
             if (!optionsOverride.manualStep && typeof setInterval === "function") {
-                const stepIntervalMs = 100;
+                const stepIntervalMs = 50;
                 crossfadeState.timerId = setInterval(() => {
                     if (!crossfadeState.active) return;
                     const elapsedSeconds = (Date.now() - crossfadeState.startedAt) / 1000;
@@ -567,6 +684,23 @@
                     crossfadeState.timerId.unref();
                 }
             }
+
+            if (typeof options.onTrackChange === "function") {
+                try {
+                    options.onTrackChange(nextTrack, {
+                        previousTrack: outgoingTrack,
+                        activeDeck: getActiveDeck(),
+                        activeDeckKey,
+                        crossfading: true,
+                        crossfadeDuration: fadeDuration,
+                    });
+                } catch (_) {
+                    // Never allow a UI listener failure to interrupt crossfade progression
+                }
+            }
+
+            syncMediaSession(nextTrack, "playing");
+            ensureEndlessQueue();
 
             emit("crossfade-start", {
                 fromTrack: outgoingTrack,
@@ -598,6 +732,7 @@
                 return track;
             }
 
+            pendingCrossfadeTrackId = null;
             cancelActiveCrossfade(true);
 
             // If the track was already preloaded on the standby deck, swap to the standby deck for zero-gap start
@@ -606,7 +741,7 @@
                 playOptions.useStandbyDeck ||
                 (preloadedTrack &&
                     preloadedTrack.id === track.id &&
-                    standby.src === track.audioUrl);
+                    isDeckLoadedWithUrl(standby, track.audioUrl));
 
             if (isPreloadedOnStandby) {
                 const prevDeck = getActiveDeck();
@@ -619,25 +754,19 @@
             }
 
             const deck = getActiveDeck();
-            if (deck.src !== track.audioUrl) {
-                deck.src = track.audioUrl;
-            }
+            setDeckSource(deck, track);
             deck.currentTime = 0;
-            if (deck.dataset) {
-                deck.dataset.trackId = track.id || "";
-            }
 
             const previousTrack = activeTrack;
             activeTrack = track;
             preloadedTrack = null;
-            applyDeckGain(activeDeckKey, 1);
 
             const shouldPlay = playOptions.autoplay !== false && !playOptions.pause;
             if (shouldPlay) {
                 initWebAudioGraph();
-                if (audioCtx && audioCtx.state === "suspended" && typeof audioCtx.resume === "function") {
-                    audioCtx.resume().catch(() => {});
-                }
+                ensureDeckWebAudioSource(activeDeckKey);
+                resumeAudioContextIfNeeded();
+                applyDeckGain(activeDeckKey, 1);
                 if (storage && typeof storage.recordPlayStart === "function") {
                     storage.recordPlayStart(track.id);
                 }
@@ -647,6 +776,7 @@
                 }
                 syncMediaSession(track, "playing");
             } else {
+                applyDeckGain(activeDeckKey, 1);
                 try {
                     deck.pause();
                 } catch (_) {}
@@ -700,7 +830,7 @@
             // Update MediaSession position state
             updateMediaSessionPosition(currentTime, duration);
 
-            if (isRepeat || crossfadeState.active) {
+            if (isRepeat || crossfadeState.active || pendingCrossfadeTrackId) {
                 return { action: "none", remainingSeconds };
             }
 
@@ -745,7 +875,8 @@
                     : queueManager;
             if (qm && typeof qm.advanceNext === "function") {
                 const nextTrack = qm.advanceNext({ shuffle: isShuffle, repeat: effectiveRepeat });
-                ensureEndlessQueue();
+                // Replenish queue without overwriting the standby deck that is about to play nextTrack
+                ensureEndlessQueue({ skipPreload: true });
                 return nextTrack;
             }
             return null;
@@ -798,8 +929,10 @@
         function play() {
             const deck = getActiveDeck();
             initWebAudioGraph();
-            if (audioCtx && audioCtx.state === "suspended" && typeof audioCtx.resume === "function") {
-                audioCtx.resume().catch(() => {});
+            ensureDeckWebAudioSource(activeDeckKey);
+            resumeAudioContextIfNeeded();
+            if (!crossfadeState.active) {
+                applyDeckGain(activeDeckKey, 1);
             }
             if (activeTrack && storage && typeof storage.recordPlayStart === "function") {
                 storage.recordPlayStart(activeTrack.id);
