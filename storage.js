@@ -624,7 +624,7 @@
                 name: cleanName,
                 description: String(description || "").trim(),
                 trackIds: Array.from(new Set((trackIds || []).map(String))),
-                coverUrl: coverUrl || "Images/Espresso.jpeg",
+                coverUrl: coverUrl || "Images/spotify-white-logo-symbol-icon-hd-png-11661570403q5drcznuwu.png",
                 createdAt: now,
                 updatedAt: now,
             };
@@ -926,7 +926,7 @@
                 sampleRate: Number(trackMeta.sampleRate) || 44100,
                 // Linked tracks never persist a URL: blob: URLs die with the page, so they are resolved at play time
                 audioUrl: isLinked ? "" : audioUrl || `blob:spottube-local/${encodeURIComponent(id)}`,
-                coverUrl: trackMeta.coverUrl || "Images/Espresso.jpeg",
+                coverUrl: trackMeta.coverUrl || "Images/spotify-white-logo-symbol-icon-hd-png-11661570403q5drcznuwu.png",
                 genre: trackMeta.genre || "Local",
                 subgenres: Array.isArray(trackMeta.subgenres) ? trackMeta.subgenres : ["Imported"],
                 language: trackMeta.language || "English",

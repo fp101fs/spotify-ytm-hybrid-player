@@ -3,6 +3,9 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 
+const os = require("node:os");
+const { buildMp3 } = require("./helpers.js");
+
 const {
   buildCatalog,
   parseTrackFilename,
@@ -13,56 +16,42 @@ const {
 
 const ROOT_DIR = path.resolve(__dirname, "..");
 
-test("buildCatalog generates valid tracks.json manifest for all /songs and /Images", () => {
+test("buildCatalog generates a valid empty tracks.json manifest when /songs has 0 included songs", () => {
   const manifest = buildCatalog({ rootDir: ROOT_DIR, writeToFile: true });
 
   assert.equal(manifest.version, "1.0.0");
-  assert.equal(manifest.totalTracks, 12);
-  assert.equal(manifest.tracks.length, 12);
-  assert.ok(manifest.genres.length >= 6);
-  assert.ok(manifest.moods.includes("Upbeat"));
-  assert.ok(manifest.moods.includes("Chill"));
-  assert.ok(manifest.moods.includes("Deep Cuts"));
+  assert.equal(manifest.totalTracks, 0);
+  assert.deepEqual(manifest.tracks, []);
+  assert.deepEqual(manifest.genres, []);
+  assert.deepEqual(manifest.moods, []);
+  assert.deepEqual(manifest.artists, []);
+  assert.deepEqual(manifest.albums, []);
+});
 
-  for (const track of manifest.tracks) {
-    assert.ok(track.id && typeof track.id === "string");
-    assert.ok(track.title && typeof track.title === "string");
-    assert.ok(track.primaryArtist && typeof track.primaryArtist === "string");
-    assert.ok(Array.isArray(track.featuredArtists));
-    assert.ok(Array.isArray(track.artists) && track.artists.length >= 1);
-    assert.ok(track.artistDisplay && typeof track.artistDisplay === "string");
-    assert.ok(track.album && typeof track.album === "string");
-    assert.ok(Number.isInteger(track.year) && track.year >= 1950 && track.year <= 2030);
-    assert.ok(typeof track.duration === "number" && track.duration > 120 && track.duration < 400);
+test("buildCatalog indexes audio files and matching covers when present in a songs/ directory", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "spottube-catalog-"));
+  try {
+    fs.mkdirSync(path.join(tmpDir, "songs"), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, "Images"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, "songs", "Espresso-Sabrina Carpenter.mp3"),
+      buildMp3({ title: "Espresso", artist: "Sabrina Carpenter", audioBytes: 2_800_000 })
+    );
+    fs.writeFileSync(path.join(tmpDir, "Images", "Espresso.jpeg"), Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+
+    const manifest = buildCatalog({ rootDir: tmpDir, writeToFile: true });
+    assert.equal(manifest.version, "1.0.0");
+    assert.equal(manifest.totalTracks, 1);
+    assert.equal(manifest.tracks.length, 1);
+
+    const track = manifest.tracks[0];
+    assert.equal(track.id, "espresso-sabrina-carpenter");
+    assert.equal(track.title, "Espresso");
+    assert.equal(track.primaryArtist, "Sabrina Carpenter");
+    assert.ok(track.duration > 120 && track.duration < 250);
     assert.match(track.durationFormatted, /^\d+:\d{2}$/);
-    assert.ok(track.bitrateKbps === 192 || track.bitrateKbps === 320);
-
-    // Relative URL checks (no leading slash, no hardcoded 127.0.0.1)
-    assert.ok(!track.audioUrl.startsWith("/"), `audioUrl must be relative: ${track.audioUrl}`);
-    assert.ok(!track.audioUrl.includes("127.0.0.1"));
-    assert.ok(!track.coverUrl.startsWith("/"), `coverUrl must be relative: ${track.coverUrl}`);
-    assert.ok(!track.coverUrl.includes("127.0.0.1"));
-
-    // Verify decoded relative URLs resolve to real files on disk
-    const decodedAudioPath = path.join(
-      ROOT_DIR,
-      ...track.audioUrl.split("/").map((s) => decodeURIComponent(s))
-    );
-    const decodedCoverPath = path.join(
-      ROOT_DIR,
-      ...track.coverUrl.split("/").map((s) => decodeURIComponent(s))
-    );
-    assert.ok(fs.existsSync(decodedAudioPath), `Missing audio file on disk: ${decodedAudioPath}`);
-    assert.ok(fs.existsSync(decodedCoverPath), `Missing cover file on disk: ${decodedCoverPath}`);
-
-    // Audio features & mood tags checks
-    assert.ok(Array.isArray(track.moods) && track.moods.length >= 2);
-    assert.ok(typeof track.bpm === "number" && track.bpm >= 60 && track.bpm <= 200);
-    assert.ok(track.energy >= 0 && track.energy <= 1);
-    assert.ok(track.valence >= 0 && track.valence <= 1);
-    assert.ok(track.danceability >= 0 && track.danceability <= 1);
-    assert.ok(track.acousticness >= 0 && track.acousticness <= 1);
-    assert.ok(track.popularity >= 0 && track.popularity <= 1);
+    assert.ok(!track.audioUrl.startsWith("/") && !track.audioUrl.includes("127.0.0.1"));
+    assert.equal(track.coverUrl, "Images/Espresso.jpeg");
     assert.deepEqual(track.audioFeatures, {
       bpm: track.bpm,
       energy: track.energy,
@@ -71,6 +60,8 @@ test("buildCatalog generates valid tracks.json manifest for all /songs and /Imag
       acousticness: track.acousticness,
       popularity: track.popularity,
     });
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
 
@@ -109,4 +100,36 @@ test("vercel.json and script.js are configured for 100% static deployment withou
   const scriptJs = fs.readFileSync(path.join(ROOT_DIR, "script.js"), "utf8");
   assert.ok(!scriptJs.includes("127.0.0.1"), "script.js must not contain hardcoded 127.0.0.1 URLs");
   assert.ok(scriptJs.includes("./tracks.json"), "script.js must fetch relative ./tracks.json");
+});
+
+test("app boots cleanly with 0 included songs in tracks.json", async () => {
+  const { createShellSandbox } = require("./helpers.js");
+  const emptyManifest = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, "tracks.json"), "utf8"));
+  assert.equal(emptyManifest.totalTracks, 0);
+  assert.deepEqual(emptyManifest.tracks, []);
+
+  const { sandbox, shell, el } = createShellSandbox();
+  let fetchedSongsFallback = false;
+  sandbox.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes("songs/")) {
+      fetchedSongsFallback = true;
+      return { ok: false, status: 404 };
+    }
+    if (u.includes("yt-allowlist.json")) return { ok: true, json: async () => ({ videos: [] }) };
+    if (u.includes("api/yt/status")) return { ok: false, status: 404, headers: { get: () => "text/html" }, json: async () => ({}) };
+    return { ok: true, json: async () => emptyManifest };
+  };
+
+  const loaded = await shell.getSongs();
+  assert.equal(loaded.length, 0);
+  assert.equal(fetchedSongsFallback, false, "must not fall back to ./songs/ when tracks.json loads with 0 tracks");
+
+  shell.setState({ songs: [] });
+  shell.renderCatalogGrid();
+  shell.renderHomeShelves();
+  shell.renderLibrarySidebar();
+  assert.equal(el("stat-track-count").textContent, "0");
+  assert.equal(el("catalog-count-badge").textContent, "0 tracks");
+  assert.equal(el("home-shelves").hidden, true);
 });

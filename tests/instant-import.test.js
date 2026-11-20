@@ -7,7 +7,7 @@ const path = require("node:path");
 const ROOT_DIR = path.resolve(__dirname, "..");
 const Library = require(path.join(ROOT_DIR, "library.js"));
 const Storage = require(path.join(ROOT_DIR, "storage.js"));
-const manifest = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, "tracks.json"), "utf8"));
+const manifest = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, "tests", "fixtures", "sample-tracks.json"), "utf8"));
 const CATALOG = manifest.tracks;
 
 // ---------- fixtures ----------
@@ -61,11 +61,12 @@ function buildWav({ title = "", seconds = 2, sampleRate = 8000 } = {}) {
 
 // ---------- library.js: byte-range tag reading ----------
 
-test("readTagBytes reads only the tag bytes of real catalog MP3s and parses them identically to a full read", async () => {
-    const files = fs.readdirSync(path.join(ROOT_DIR, "songs")).filter((f) => f.endsWith(".mp3")).slice(0, 4);
-    assert.ok(files.length > 0);
-    for (const name of files) {
-        const buf = new Uint8Array(fs.readFileSync(path.join(ROOT_DIR, "songs", name)));
+test("readTagBytes reads only the tag bytes of large MP3s and parses them identically to a full read", async () => {
+    const samples = [
+        { name: "Alpha - First Song.mp3", buf: buildMp3({ title: "First Song", artist: "Alpha", album: "Debut", audioBytes: 3_200_000 }) },
+        { name: "Beta - Second Song.mp3", buf: buildMp3({ title: "Second Song", artist: "Beta", album: "LP2", audioBytes: 2_400_000, v1: { title: "Fallback", artist: "Fallback" } }) },
+    ];
+    for (const { name, buf } of samples) {
         const full = Library.parseAudioMetadata(buf, name);
         const file = sliceableFile(name, buf);
         const { parsed, bytesRead } = await Library.readAudioMetadataFromFile(file, { probeDuration: null });

@@ -177,12 +177,14 @@ function secondsToMinutesSeconds(seconds) {
  */
 async function getSongs() {
     let baseTracks = [];
+    let manifestLoaded = false;
     try {
         const res = await fetch("./tracks.json");
         if (res.ok) {
             const manifest = await res.json();
             const tracks = Array.isArray(manifest) ? manifest : (manifest.tracks || []);
             window.TRACK_CATALOG = manifest;
+            manifestLoaded = true;
             if (tracks.length > 0) {
                 baseTracks = tracks.slice();
             }
@@ -191,45 +193,51 @@ async function getSongs() {
         console.warn("Static tracks.json fetch failed, attempting relative /songs/ fallback:", err);
     }
 
-    if (baseTracks.length === 0) {
+    if (!manifestLoaded && baseTracks.length === 0) {
         // Fallback for unindexed local directory listing using relative path
-        const res = await fetch("./songs/");
-        const html = await res.text();
-        const div = document.createElement("div");
-        div.innerHTML = html;
-        const anchors = div.getElementsByTagName("a");
+        try {
+            const res = await fetch("./songs/");
+            if (res && res.ok && typeof res.text === "function") {
+                const html = await res.text();
+                const div = document.createElement("div");
+                div.innerHTML = html;
+                const anchors = div.getElementsByTagName("a");
 
-        for (let i = 0; i < anchors.length; i++) {
-            const href = anchors[i].getAttribute("href") || "";
-            if (href.toLowerCase().endsWith(".mp3")) {
-                const rawFile = decodeURIComponent(href.split("/").pop());
-                const [rawTitle, rawArtistPart = "Unknown Artist"] = rawFile.replace(/\.mp3$/i, "").split("-");
-                const title = rawTitle.trim();
-                const artistDisplay = rawArtistPart.trim();
-                baseTracks.push({
-                    id: `${title}-${artistDisplay}`.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
-                    filename: rawFile,
-                    title,
-                    primaryArtist: artistDisplay.split(",")[0].trim(),
-                    artists: artistDisplay.split(",").map((s) => s.trim()),
-                    artistDisplay,
-                    album: `${title} (Single)`,
-                    year: 2024,
-                    duration: 0,
-                    durationFormatted: "0:00",
-                    audioUrl: `songs/${encodeURIComponent(rawFile)}`,
-                    coverUrl: `Images/${encodeURIComponent(title)}.jpeg`,
-                    genre: "Pop",
-                    language: "English",
-                    moods: ["Chill"],
-                    bpm: 110,
-                    energy: 0.65,
-                    valence: 0.6,
-                    danceability: 0.65,
-                    acousticness: 0.3,
-                    popularity: 0.75,
-                });
+                for (let i = 0; i < anchors.length; i++) {
+                    const href = anchors[i].getAttribute("href") || "";
+                    if (href.toLowerCase().endsWith(".mp3")) {
+                        const rawFile = decodeURIComponent(href.split("/").pop());
+                        const [rawTitle, rawArtistPart = "Unknown Artist"] = rawFile.replace(/\.mp3$/i, "").split("-");
+                        const title = rawTitle.trim();
+                        const artistDisplay = rawArtistPart.trim();
+                        baseTracks.push({
+                            id: `${title}-${artistDisplay}`.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+                            filename: rawFile,
+                            title,
+                            primaryArtist: artistDisplay.split(",")[0].trim(),
+                            artists: artistDisplay.split(",").map((s) => s.trim()),
+                            artistDisplay,
+                            album: `${title} (Single)`,
+                            year: 2024,
+                            duration: 0,
+                            durationFormatted: "0:00",
+                            audioUrl: `songs/${encodeURIComponent(rawFile)}`,
+                            coverUrl: `Images/${encodeURIComponent(title)}.jpeg`,
+                            genre: "Pop",
+                            language: "English",
+                            moods: ["Chill"],
+                            bpm: 110,
+                            energy: 0.65,
+                            valence: 0.6,
+                            danceability: 0.65,
+                            acousticness: 0.3,
+                            popularity: 0.75,
+                        });
+                    }
+                }
             }
+        } catch (err) {
+            console.warn("Relative /songs/ fallback unavailable:", err);
         }
     }
 
@@ -812,7 +820,12 @@ function renderCatalogGrid() {
 
 function renderLibrarySidebar() {
     const listContainer = document.getElementById("library-tracks-list");
-    if (!listContainer || !songs.length) return;
+    if (!listContainer) return;
+    if (!songs.length) {
+        if (typeof listContainer.replaceChildren === "function") listContainer.replaceChildren();
+        renderUserPlaylistsSidebar();
+        return;
+    }
 
     const activeTrack = songs[currentTrackIndex];
     const nodes = [];
@@ -1827,7 +1840,7 @@ function buildAlbumSummaryObject(albumName, albumTracks, relationLabel = "Album 
     return {
         album: albumName,
         year: first.year || 2024,
-        coverUrl: first.coverUrl || "Images/Espresso.jpeg",
+        coverUrl: first.coverUrl || "Images/spotify-white-logo-symbol-icon-hd-png-11661570403q5drcznuwu.png",
         primaryArtist: first.primaryArtist || artists[0] || "Unknown Artist",
         artists,
         artistDisplay: artists.join(", "),
@@ -2049,7 +2062,7 @@ function buildArtistDetailData(artistNameInput, options = {}) {
         title: canonicalArtist,
         badge: "ARTIST",
         eyebrow: `ARTIST PROFILE • ${artistGenres.join(" / ") || "HYBRID CATALOG"}`,
-        coverUrl: leadTrack?.coverUrl || "Images/Espresso.jpeg",
+        coverUrl: leadTrack?.coverUrl || "Images/spotify-white-logo-symbol-icon-hd-png-11661570403q5drcznuwu.png",
         subtitle: `${topTracks.length} ${topTracks.length === 1 ? "song" : "songs"} in your library • ${directAlbumCount} ${directAlbumCount === 1 ? "release" : "releases"}${collaborators.length ? ` • Collaborates with ${collaborators.join(", ")}` : ""}`,
         genres: artistGenres,
         moods,
@@ -2222,7 +2235,7 @@ function buildAlbumDetailData(albumNameInput, options = {}) {
         moods,
         badge: "ALBUM",
         eyebrow: `ALBUM • ${year} • ${genre.toUpperCase()}`,
-        coverUrl: first.coverUrl || "Images/Espresso.jpeg",
+        coverUrl: first.coverUrl || "Images/spotify-white-logo-symbol-icon-hd-png-11661570403q5drcznuwu.png",
         subtitle: `By ${artists.join(", ")} • ${albumTracks.length} ${albumTracks.length === 1 ? "track" : "tracks"} (${formatTotalDuration(totalDuration)})`,
         trackCount: albumTracks.length,
         totalDuration,
@@ -2400,7 +2413,7 @@ function buildSongDetailData(trackOrId, options = {}) {
         moods: track.moods || [],
         badge: "SONG",
         eyebrow: `SONG • ${(track.genre || "MUSIC").toUpperCase()} • ${track.year || 2024}`,
-        coverUrl: track.coverUrl || "Images/Espresso.jpeg",
+        coverUrl: track.coverUrl || "Images/spotify-white-logo-symbol-icon-hd-png-11661570403q5drcznuwu.png",
         subtitle: `${artists.join(", ")} • Album: ${primaryAlbum} (${track.year || 2024}) • ${track.durationFormatted || "0:00"}`,
         trackCount: topTracks.length,
         totalDuration: track.duration || 0,
@@ -3567,7 +3580,7 @@ function buildOmniSearchResults(queryInput, options = {}) {
             id: entry.artist,
             artist: entry.artist,
             title: entry.artist,
-            coverUrl: leadTrack?.coverUrl || "Images/Espresso.jpeg",
+            coverUrl: leadTrack?.coverUrl || "Images/spotify-white-logo-symbol-icon-hd-png-11661570403q5drcznuwu.png",
             trackCount: entry.tracks.length,
             albumCount: albumsArr.length,
             genres: genresArr,
@@ -3722,7 +3735,7 @@ function buildOmniSearchResults(queryInput, options = {}) {
             subtitle: sampleArtists.length
                 ? `Feat. ${sampleArtists.join(", ")}`
                 : `${entry.tracks.length} tracks in catalog`,
-            coverUrl: entry.tracks[0]?.coverUrl || "Images/Espresso.jpeg",
+            coverUrl: entry.tracks[0]?.coverUrl || "Images/spotify-white-logo-symbol-icon-hd-png-11661570403q5drcznuwu.png",
             score: tagScore,
             tagScore: isExploreMode ? 0.5 : tagRes.score,
             matchReason,
@@ -3783,7 +3796,7 @@ function buildOmniSearchResults(queryInput, options = {}) {
                 title: `${moodFilter} Vibe Radio`,
                 subtitle: `${basePool.length} matching tracks • Dynamic mood station`,
                 badge: "TOP RESULT • MOOD STATION",
-                coverUrl: heroTrack?.coverUrl || "Images/Espresso.jpeg",
+                coverUrl: heroTrack?.coverUrl || "Images/spotify-white-logo-symbol-icon-hd-png-11661570403q5drcznuwu.png",
                 score: 1,
                 matchReason: "Active Mood Filter",
                 pills: [
@@ -3956,7 +3969,7 @@ function buildOmniSearchResults(queryInput, options = {}) {
                 title: `Search Mix: "${rawQuery}"`,
                 subtitle: `Custom AI/Sonic Radio Station seeded by your taste & audio features`,
                 badge: "TOP RESULT • CUSTOM SEARCH STATION",
-                coverUrl: fallbackLead?.coverUrl || "Images/Espresso.jpeg",
+                coverUrl: fallbackLead?.coverUrl || "Images/spotify-white-logo-symbol-icon-hd-png-11661570403q5drcznuwu.png",
                 score: 0.75,
                 matchReason: "Sonic Fallback Station",
                 pills: [
@@ -4667,7 +4680,7 @@ function collectDistinctCovers(trackList = [], fallbackTracks = [], count = 4) {
     while (covers.length < count && covers.length > 0) {
         covers.push(covers[covers.length % covers.length]);
     }
-    return covers.length > 0 ? covers : ["Images/Espresso.jpeg"];
+    return covers.length > 0 ? covers : ["Images/spotify-white-logo-symbol-icon-hd-png-11661570403q5drcznuwu.png"];
 }
 
 function collectDistinctArtists(trackList = [], limit = 4) {
@@ -4810,7 +4823,7 @@ function buildSupermixData(catalogInput, options = {}) {
             likedCount > 0 || playedCount > 0
                 ? `Tailored from ${likedCount} liked & ${playedCount} played tracks • ${avgEnergyPct}% Energy • ${avgBpm} BPM`
                 : `Nonstop multi-genre blend across ${genres.join(", ")} • ${avgEnergyPct}% Energy • ${avgBpm} BPM`,
-        coverUrl: leadTrack?.coverUrl || "Images/Espresso.jpeg",
+        coverUrl: leadTrack?.coverUrl || "Images/spotify-white-logo-symbol-icon-hd-png-11661570403q5drcznuwu.png",
         collageCovers,
         artists,
         genres,
@@ -5105,7 +5118,7 @@ function buildDailyMixes(catalogInput, options = {}) {
             vibeTitle: profile.vibeTitle,
             subtitle: `${coreArtists.slice(0, 3).join(", ")}${coreArtists.length > 3 ? " & more" : ""}`,
             description: `${genres.slice(0, 2).join(" • ") || profile.vibeTitle} • ${avgEnergyPct}% Energy • ${avgBpm} BPM`,
-            coverUrl: distinctLead?.coverUrl || "Images/Espresso.jpeg",
+            coverUrl: distinctLead?.coverUrl || "Images/spotify-white-logo-symbol-icon-hd-png-11661570403q5drcznuwu.png",
             collageCovers,
             artists: coreArtists,
             genres,
@@ -5692,7 +5705,7 @@ function createSmartMixCardNode(mix, activeMixSession = null) {
 
     const covers = Array.isArray(mix.collageCovers) && mix.collageCovers.length > 0
         ? mix.collageCovers.slice(0, 4)
-        : [mix.coverUrl || "Images/Espresso.jpeg"];
+        : [mix.coverUrl || "Images/spotify-white-logo-symbol-icon-hd-png-11661570403q5drcznuwu.png"];
     while (covers.length < 4) {
         covers.push(covers[0]);
     }
@@ -5868,7 +5881,23 @@ function createShelfTrackCardNode(track, shelfId) {
  * 4. *Rediscover / Forgotten Favorites* (`#rediscover-grid`)
  */
 function renderHomeShelves(options = {}) {
-    if (!songs.length) return null;
+    const homeShelvesContainer = document.getElementById("home-shelves");
+    if (!songs.length) {
+        if (homeShelvesContainer) {
+            homeShelvesContainer.hidden = true;
+            homeShelvesContainer.dataset.shelfCount = "0";
+        }
+        const smartMixesMeta = document.getElementById("shelf-smart-mixes-meta");
+        if (smartMixesMeta) smartMixesMeta.textContent = "0 stations";
+        for (const id of ["smart-mixes-grid", "jump-back-in-grid", "on-repeat-grid", "rediscover-grid"]) {
+            const grid = document.getElementById(id);
+            if (grid && typeof grid.replaceChildren === "function") grid.replaceChildren();
+        }
+        return null;
+    }
+    if (homeShelvesContainer) {
+        homeShelvesContainer.hidden = false;
+    }
     const data = options.data || buildHomeShelvesData(options);
     const qm = getQueueManager();
     const activeMixSession =
@@ -5925,7 +5954,6 @@ function renderHomeShelves(options = {}) {
         rediscoverGrid.replaceChildren(...rediscoverNodes);
     }
 
-    const homeShelvesContainer = document.getElementById("home-shelves");
     if (homeShelvesContainer) {
         homeShelvesContainer.dataset.shelfCount = String(data.shelves.length);
         homeShelvesContainer.dataset.activeMood = activeMoodFilter;
@@ -6916,7 +6944,7 @@ async function main() {
     hydrateFromStorage();
     songs = await getSongs();
     const songDiv = document.querySelector(".spotify-playlist");
-    if (!songs.length || !songDiv) return;
+    if (!songDiv) return;
 
     const store = getStorage();
     const pe = getPlayerEngine();
@@ -6940,7 +6968,12 @@ async function main() {
     await initFolderSources();
     initYouTubeControls();
     checkYouTubeApi();
-    playMusic(0, true);
+    if (songs.length > 0) {
+        playMusic(0, true);
+    } else {
+        renderDrawerQueue();
+        syncCrossfadeUI();
+    }
 
     const playBtn = document.getElementById("play");
     playBtn.addEventListener("click", () => {

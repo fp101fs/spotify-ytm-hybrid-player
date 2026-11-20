@@ -115,7 +115,7 @@ test("style.css implements full-viewport 3-pane grid, collapsible drawer state, 
 
 test("script.js wires 3-pane shell interactions (mood filtering, drawer toggle, tabs, queue, track info)", () => {
     const js = fs.readFileSync(path.join(ROOT_DIR, "script.js"), "utf8");
-    const manifest = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, "tracks.json"), "utf8"));
+    const manifest = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, "tests", "fixtures", "sample-tracks.json"), "utf8"));
 
     for (const fnName of [
         "getFilteredSongs",

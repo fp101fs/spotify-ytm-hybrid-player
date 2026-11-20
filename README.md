@@ -2,7 +2,7 @@
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Ffp101fs%2Fspotify-ytm-hybrid-player&project-name=spotify-ytm-hybrid-player&repository-name=spotify-ytm-hybrid-player)
 
-A static-first music player that mixes Spotify's 3-pane layout, Daily Mixes and crossfade with YouTube Music's one-click "Start Mix" radio, mood tuning chips and live Up Next queue. It runs from a pre-built `tracks.json` manifest, keeps your taste profile, playlists and imported audio in the browser (localStorage + IndexedDB), and uses one small server function (`/api/yt`) only for YouTube videos.
+A static-first music player that mixes Spotify's 3-pane layout, Daily Mixes and crossfade with YouTube Music's one-click "Start Mix" radio, mood tuning chips and live Up Next queue. It ships with **0 bundled songs**—import your own local music folders/files or search and play via YouTube Music. Your taste profile, playlists and imported audio stay in the browser (localStorage + IndexedDB), and one small server function (`/api/yt`) handles YouTube playback, search and radio.
 
 > The repository is private, so the Deploy button works for accounts that can read it. Vercel will ask you to connect GitHub and will create a copy of the repo in your account.
 
@@ -55,7 +55,9 @@ npm start              # app + /api on http://127.0.0.1:5500 (PORT/HOST to chang
 
 `npm run start:static` (Python's static server) also works, without YouTube videos.
 
-## Add songs to the built-in catalog
+## Add songs to the built-in catalog (optional)
+
+The repo ships with **0 included songs** (`songs/` is empty and `tracks.json` has `totalTracks: 0`). If you want to bundle static tracks into a deploy:
 
 1. Put audio in `songs/` named `Title-Artist.mp3` (several artists: `Title-Artist A, Artist B.mp3`).
 2. Put the cover in `Images/` named `Title.jpeg`.
@@ -94,4 +96,4 @@ npm run test:yt        # optional live check against YouTube
 
 ## Credits
 
-Built on [JustJ01/Spotify-UI-Clone](https://github.com/JustJ01/Spotify-UI-Clone). Not affiliated with Spotify or YouTube. The bundled songs are for personal demo use only. You are responsible for the YouTube videos you add.
+Built on [JustJ01/Spotify-UI-Clone](https://github.com/JustJ01/Spotify-UI-Clone). Not affiliated with Spotify or YouTube. No songs are bundled in this repository; you are responsible for the local files and YouTube videos you add.

@@ -456,7 +456,7 @@ test("index.html and script.js integrate SpotTubeStorage for likes, telemetry, a
 
     const storageJs = fs.readFileSync(path.join(ROOT_DIR, "storage.js"), "utf8");
     const scriptJs = fs.readFileSync(path.join(ROOT_DIR, "script.js"), "utf8");
-    const manifest = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, "tracks.json"), "utf8"));
+    const manifest = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, "tests", "fixtures", "sample-tracks.json"), "utf8"));
 
     const elementsById = new Map();
     const makeEl = (id = "") => ({

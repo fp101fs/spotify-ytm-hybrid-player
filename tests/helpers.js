@@ -6,7 +6,7 @@ const vm = require("node:vm");
 
 const ROOT_DIR = path.resolve(__dirname, "..");
 const Storage = require(path.join(ROOT_DIR, "storage.js"));
-const manifest = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, "tracks.json"), "utf8"));
+const manifest = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, "tests", "fixtures", "sample-tracks.json"), "utf8"));
 const CATALOG = manifest.tracks;
 
 const ascii = (str) => Array.from(Buffer.from(str, "latin1"));

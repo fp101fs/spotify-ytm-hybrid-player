@@ -7,7 +7,7 @@ const vm = require("node:vm");
 const ROOT_DIR = path.resolve(__dirname, "..");
 const Library = require(path.join(ROOT_DIR, "library.js"));
 const Storage = require(path.join(ROOT_DIR, "storage.js"));
-const manifest = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, "tracks.json"), "utf8"));
+const manifest = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, "tests", "fixtures", "sample-tracks.json"), "utf8"));
 const CATALOG = manifest.tracks;
 
 // ---------- Synthetic audio file builders ----------
@@ -206,14 +206,18 @@ test("parseAudioMetadata reads ID3v2.4 UTF-8 frames with syncsafe sizes", () => 
     assert.equal(parsed.tags.year, "2021-05-01");
 });
 
-test("parseAudioMetadata estimates real catalog MP3 durations within 3% of tracks.json", () => {
-    const sample = CATALOG.slice(0, 3);
-    for (const track of sample) {
-        const bytes = fs.readFileSync(path.join(ROOT_DIR, "songs", track.filename));
-        const parsed = Library.parseAudioMetadata(bytes, track.filename);
+test("parseAudioMetadata estimates MP3 CBR durations within 3% of expected length", () => {
+    const cases = [
+        { audioBytes: 1_600_000, expectedSec: 100 }, // 128 kbps = 16,000 B/s
+        { audioBytes: 3_200_000, expectedSec: 200 },
+        { audioBytes: 4_800_000, expectedSec: 300 },
+    ];
+    for (const { audioBytes, expectedSec } of cases) {
+        const bytes = buildMp3({ title: "Sample", artist: "Artist", audioBytes });
+        const parsed = Library.parseAudioMetadata(bytes, "Sample-Artist.mp3");
         assert.equal(parsed.format, "mp3");
-        const diff = Math.abs(parsed.duration - track.duration) / track.duration;
-        assert.ok(diff < 0.03, `${track.filename}: ${parsed.duration} vs ${track.duration}`);
+        const diff = Math.abs(parsed.duration - expectedSec) / expectedSec;
+        assert.ok(diff < 0.03, `${expectedSec}s: got ${parsed.duration}`);
     }
 });
 

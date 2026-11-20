@@ -522,14 +522,12 @@ function buildCatalog({
   const songsDir = path.join(rootDir, "songs");
   const imagesDir = path.join(rootDir, "Images");
 
-  if (!fs.existsSync(songsDir)) {
-    throw new Error(`Songs directory not found at ${songsDir}`);
-  }
-
-  const songFiles = fs
-    .readdirSync(songsDir)
-    .filter((f) => AUDIO_EXTENSIONS.has(path.extname(f).toLowerCase()))
-    .sort((a, b) => a.localeCompare(b, "en", { sensitivity: "base" }));
+  const songFiles = fs.existsSync(songsDir)
+    ? fs
+        .readdirSync(songsDir)
+        .filter((f) => AUDIO_EXTENSIONS.has(path.extname(f).toLowerCase()))
+        .sort((a, b) => a.localeCompare(b, "en", { sensitivity: "base" }))
+    : [];
 
   const imageFiles = fs.existsSync(imagesDir) ? fs.readdirSync(imagesDir) : [];
 
