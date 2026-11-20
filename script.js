@@ -382,12 +382,9 @@ const playMusic = (trackOrIndex, pause = false, options = {}) => {
         });
     }
 
-    // Item 16: without the server a YouTube video can only be watched in YouTube's own player
+    // YouTube tracks only play through the app's server (ytdl-core), never YouTube's own player
     if (isYouTubeTrack(track) && ytApiState.status === "missing" && !pause) {
-        currentTrackIndex = nextIndex;
-        updatePlaybarTrackMeta(track);
-        syncActiveTrackUI();
-        openYouTubeEmbed(track, { withSound: true });
+        handleYouTubePlaybackError(track);
         return;
     }
 
@@ -9860,9 +9857,7 @@ function setYouTubeNote(text) {
 function openYouTubeVideo(track = songs[currentTrackIndex], options = {}) {
     const YT = getYouTubeModule();
     if (!YT || !isYouTubeTrack(track)) return false;
-    if (ytApiState.status === "missing" || options.embed) {
-        return openYouTubeEmbed(track, { withSound: options.withSound ?? ytApiState.status === "missing", reason: options.reason });
-    }
+    if (ytApiState.status === "missing") return false;
     const panel = document.getElementById("yt-video-panel");
     const video = getYouTubeVideoEl();
     if (!panel || !video) return false;
@@ -9870,7 +9865,6 @@ function openYouTubeVideo(track = songs[currentTrackIndex], options = {}) {
     const token = ++ytVideo.token;
     ytVideo = { open: true, mode: "video", trackId: track.id, withSound: false, captions: [], captionsOn: false, token };
     renderYouTubePanelChrome(track);
-    clearYouTubeEmbed();
     video.hidden = false;
     // Remove old caption tracks before switching source
     if (typeof video.querySelectorAll === "function") video.querySelectorAll("track").forEach((t) => t.remove());
@@ -9965,83 +9959,21 @@ function setYouTubeCaptions(on) {
     }
 }
 
-function clearYouTubeEmbed() {
-    const slot = document.getElementById("yt-embed-slot");
-    if (slot) {
-        slot.replaceChildren();
-        slot.hidden = true;
-    }
-}
-
-/**
- * Watch-only fallback with YouTube's own player. withSound: the deck couldn't play it, so the embed plays the
- * sound (outside crossfade, volume and the playbar). Otherwise the embed is muted next to working audio.
- */
-function openYouTubeEmbed(track, options = {}) {
-    const YT = getYouTubeModule();
-    const panel = document.getElementById("yt-video-panel");
-    const slot = document.getElementById("yt-embed-slot");
-    if (!YT || !panel || !slot || !isYouTubeTrack(track)) return false;
-    const withSound = Boolean(options.withSound);
-    const video = getYouTubeVideoEl();
-    if (video) {
-        if (typeof video.pause === "function") video.pause();
-        video.removeAttribute("src");
-        video.hidden = true;
-    }
-    if (withSound) {
-        const pe = getPlayerEngine();
-        if (pe && typeof pe.pause === "function") pe.pause();
-        else if (currentSong && typeof currentSong.pause === "function") currentSong.pause();
-        updatePlayButtonIcon(true);
-    }
-    ytVideoWanted = true;
-    ytVideo = { open: true, mode: "embed", trackId: track.id, withSound, captions: [], captionsOn: false, token: ytVideo.token + 1 };
-    renderYouTubePanelChrome(track);
-    const start = withSound ? 0 : Math.floor(Number(currentSong && currentSong.currentTime) || 0);
-    const iframe = document.createElement("iframe");
-    iframe.src = YT.buildEmbedUrl(track.youtubeId, start, { autoplay: true, mute: !withSound });
-    iframe.title = `YouTube player: ${track.title}`;
-    iframe.allow = "autoplay; encrypted-media; picture-in-picture; fullscreen";
-    iframe.setAttribute("allowfullscreen", "");
-    iframe.setAttribute("referrerpolicy", "strict-origin-when-cross-origin");
-    iframe.className = "yt-embed";
-    slot.replaceChildren(iframe);
-    slot.hidden = false;
-    const why = options.reason ? `${options.reason} ` : "";
-    setYouTubeNote(
-        withSound
-            ? `${why}Watching in YouTube's own player: its sound doesn't go through SpotTube's crossfade or volume, and the playbar doesn't control it.`
-            : `${why}Showing YouTube's own player, muted, next to the sound in the player below. It may drift from the sound.`
-    );
-    panel.hidden = false;
-    updateYouTubeToggle(songs[currentTrackIndex]);
-    revealYouTubePanel();
-    return true;
-}
-
 function showYouTubeVideoError(track, code) {
     const YT = getYouTubeModule();
     if (!YT || ytVideo.trackId !== track.id) return;
-    const message = YT.describeYtError(code);
-    if (YT.canFallBackToEmbed(code) && ytVideo.mode === "video") {
-        openYouTubeEmbed(track, { withSound: false, reason: `Couldn't load the video here. ${message}` });
-    } else {
-        setYouTubeNote(message);
-    }
+    setYouTubeNote(YT.describeYtError(code));
 }
 
 function closeYouTubeVideo(options = {}) {
     const panel = document.getElementById("yt-video-panel");
     const video = getYouTubeVideoEl();
-    const wasEmbedWithSound = ytVideo.mode === "embed" && ytVideo.withSound;
     if (video) {
         if (typeof video.pause === "function") video.pause();
         if (typeof video.removeAttribute === "function") video.removeAttribute("src");
         if (typeof video.querySelectorAll === "function") video.querySelectorAll("track").forEach((t) => t.remove());
         if (typeof video.load === "function") video.load();
     }
-    clearYouTubeEmbed();
     if (panel) panel.hidden = true;
     ytVideo = { open: false, mode: "video", trackId: null, withSound: false, captions: [], captionsOn: false, token: ytVideo.token + 1 };
     if (!options.keepWanted) ytVideoWanted = false;
@@ -10051,7 +9983,6 @@ function closeYouTubeVideo(options = {}) {
         const btn = document.getElementById("playbar-video-btn");
         if (btn && !btn.hidden) btn.focus();
     }
-    return wasEmbedWithSound;
 }
 
 function toggleYouTubeVideo(force) {
@@ -10123,7 +10054,8 @@ async function handleYouTubePlaybackError(track) {
     if (!YT || !isYouTubeTrack(track) || ytErrorShownFor === track.id) return null;
     ytErrorShownFor = track.id;
     let code = "UPSTREAM";
-    try {
+    if (ytApiState.status === "missing") code = "NO_SERVER";
+    else try {
         const res = await fetch(`./api/yt/info?id=${encodeURIComponent(track.youtubeId)}`, { cache: "no-store" });
         const type = res.headers && typeof res.headers.get === "function" ? res.headers.get("content-type") || "" : "";
         if (!/json/.test(type)) code = "NO_SERVER";
@@ -10140,9 +10072,7 @@ async function handleYouTubePlaybackError(track) {
         timeoutMs: 0,
         action: YT.needsCookies && YT.needsCookies(code)
             ? { label: "Add YouTube cookies", onClick: () => openYouTubeCookiesDialog() }
-            : YT.canFallBackToEmbed(code)
-              ? { label: "Watch in YouTube's player", onClick: () => openYouTubeEmbed(track, { withSound: true }) }
-              : null,
+            : null,
     });
     return code;
 }
@@ -10726,10 +10656,7 @@ function initYouTubeControls() {
     if (toggle) toggle.addEventListener("click", () => toggleYouTubeVideo());
     const close = document.getElementById("yt-video-close-btn");
     if (close) {
-        close.addEventListener("click", () => {
-            const hadSound = closeYouTubeVideo({ returnFocus: true });
-            if (hadSound) showLibraryToast("Closed YouTube's player. Press play to listen in SpotTube.");
-        });
+        close.addEventListener("click", () => closeYouTubeVideo({ returnFocus: true }));
     }
     const cc = document.getElementById("yt-video-cc-btn");
     if (cc) cc.addEventListener("click", () => setYouTubeCaptions(!ytVideo.captionsOn));
@@ -10762,7 +10689,6 @@ window.SpotTubeShell = {
     submitYouTubeAddForm,
     renderYouTubeLibraryPanel,
     openYouTubeVideo,
-    openYouTubeEmbed,
     closeYouTubeVideo,
     toggleYouTubeVideo,
     syncYouTubeVideo,

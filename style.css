@@ -4756,7 +4756,6 @@ span.detail-track-cover.import-shimmer {
 .yt-library-panel[hidden],
 .yt-video-panel[hidden],
 .yt-available[hidden],
-.yt-embed-slot[hidden],
 .playbar-video-btn[hidden],
 .yt-video[hidden] {
     display: none;
@@ -5004,9 +5003,7 @@ span.detail-track-cover.import-shimmer {
     overflow: hidden;
 }
 
-.yt-video,
-.yt-embed-slot,
-.yt-embed {
+.yt-video {
     position: absolute;
     inset: 0;
     inline-size: 100%;

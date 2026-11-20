@@ -98,7 +98,7 @@ function createShellSandbox(options = {}) {
                 "local-sources", "add-music-source-items",
                 "settings-dialog", "match-review-dialog", "lookup-progress", "detail-lookup-btn", "detail-review-matches-btn",
                 "settings-lookup-note", "match-review-empty", "match-review-overwrite-wrap",
-                "yt-library-panel", "yt-video-panel", "yt-embed-slot", "playbar-video-btn", "yt-available", "yt-video-cc-btn",
+                "yt-library-panel", "yt-video-panel", "playbar-video-btn", "yt-available", "yt-video-cc-btn",
             ].includes(id),
             textContent: "",
             innerHTML: "",

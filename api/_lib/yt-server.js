@@ -179,7 +179,7 @@ const STATUS = {
     UPSTREAM: 502,
 };
 
-/** Library error (or any thrown error) → `{ status, code, message, embed }` for the JSON body. */
+/** Library error (or any thrown error) → `{ status, code, message }` for the JSON body. */
 function mapYtError(err) {
     const libCode = err && typeof err.code === "string" ? err.code : "";
     const text = String((err && err.message) || "");
@@ -211,7 +211,6 @@ function mapYtError(err) {
         status: STATUS[code] || 502,
         code,
         message: code === "COOKIE_INVALID" ? text : YT.describeYtError(code),
-        embed: YT.canFallBackToEmbed(code),
     };
 }
 
@@ -236,10 +235,14 @@ function sendJson(res, status, body, extraHeaders = {}) {
 function sendError(res, err, log, req) {
     const mapped = mapYtError(err);
     if (log && mapped.code !== "INVALID_ID") {
-        log.warn(`[yt] ${mapped.code}: ${String((err && err.message) || err).slice(0, 300)}`);
+        // Which ytdl-core clients were tried, signed in or not, and how each failed (no cookie values)
+        const tried = Array.isArray(err && err.attempts)
+            ? ` | tried: ${err.attempts.map((a) => `${a.client}${a.signedIn ? "+cookie" : ""}=${a.code}@${a.step}`).join(", ")}`
+            : "";
+        log.warn(`[yt] ${mapped.code}: ${String((err && err.message) || err).slice(0, 300)}${tried}`);
     }
     const extra = mapped.code === "COOKIE_EXPIRED" && req ? { "Set-Cookie": Cookies.authSetCookies(req, "") } : {};
-    sendJson(res, mapped.status, { error: { code: mapped.code, message: mapped.message, embed: mapped.embed } }, extra);
+    sendJson(res, mapped.status, { error: { code: mapped.code, message: mapped.message } }, extra);
 }
 
 const MAX_BODY = 512 * 1024;

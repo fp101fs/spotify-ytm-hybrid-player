@@ -96,7 +96,7 @@ test("suggestions: the shipped yt-allowlist.json is valid; license is a credit, 
     assert.deepStrictEqual([filled.title, filled.artistDisplay, filled.durationFormatted], ["Real", "Chan", "1:01"]);
 });
 
-test("buildYouTubeTrack makes a same-origin catalog track; embed URL and video sync helpers", () => {
+test("buildYouTubeTrack makes a same-origin catalog track; no embed helper; video sync helpers", () => {
     const entry = YT.validateAllowlist(ALLOWLIST).entries[0];
     const t = YT.buildYouTubeTrack(entry);
     assert.strictEqual(t.id, `yt-${entry.id}`);
@@ -109,11 +109,7 @@ test("buildYouTubeTrack makes a same-origin catalog track; embed URL and video s
     assert.ok(YT.isYouTubeTrack(t));
     assert.ok(!YT.isYouTubeTrack({ source: "youtube", youtubeId: "bad" }));
 
-    const embed = new URL(YT.buildEmbedUrl("owrhKIN3Y90", 61.7, { autoplay: true, mute: true }));
-    assert.strictEqual(embed.hostname, "www.youtube-nocookie.com");
-    assert.strictEqual(embed.searchParams.get("start"), "61");
-    assert.strictEqual(embed.searchParams.get("mute"), "1");
-    assert.strictEqual(embed.searchParams.get("autoplay"), "1");
+    assert.strictEqual(YT.buildEmbedUrl, undefined, "YouTube's own player is never used");
 
     assert.deepStrictEqual(
         { ...YT.computeVideoSync({ audioTime: 10, videoTime: 10.2, audioPaused: false, videoPaused: false }), drift: 0 },
@@ -176,11 +172,11 @@ test("mapYtError: bot check, age/region blocks, removed videos and the rest get 
         [{ code: "INVALID_URL", message: "x" }, "INVALID_ID", 400, false],
         [new Error("socket hang up"), "UPSTREAM", 502, true],
     ];
-    for (const [err, code, status, embed] of cases) {
+    for (const [err, code, status] of cases) {
         const m = Server.mapYtError(err);
         assert.strictEqual(m.code, code, String(err.message || err.code));
         assert.strictEqual(m.status, status, code);
-        assert.strictEqual(m.embed, embed, code);
+        assert.strictEqual(m.embed, undefined, code);
         assert.ok(m.message.length > 20);
     }
     assert.match(Server.mapYtError({ code: "BOT_CHECK" }).message, /not a bot/);
@@ -334,7 +330,7 @@ test("handler: YouTube errors become JSON with clear codes, even when the stream
         assert.strictEqual(res.status, 503);
         const body = await res.json();
         assert.strictEqual(body.error.code, "BOT_CHECK");
-        assert.strictEqual(body.error.embed, true);
+        assert.strictEqual(body.error.embed, undefined);
         assert.match(body.error.message, /not a bot/);
     });
     const age = Object.assign(new Error("age"), { code: "AGE_RESTRICTED" });
@@ -530,22 +526,15 @@ test("app: added videos come back after a reload; mixes leave them out while the
     assert.deepStrictEqual([yt[1].title, yt[1].artistDisplay, yt[1].duration], ["Saved title", "Saved artist", 90]);
 });
 
-test("app: without the server, playing a YouTube track opens YouTube's player with sound instead", async () => {
+test("app: without the server, playing a YouTube track shows an error and never opens YouTube's player", async () => {
     const { shell, el } = await youtubeShell({ apiMissing: true });
     shell.addYouTubeVideo(ID);
     const track = shell.getYouTubeTracks()[0];
     shell.playMusic(track);
-    const state = shell.getYouTubeVideoState();
-    assert.strictEqual(state.open, true);
-    assert.strictEqual(state.mode, "embed");
-    assert.strictEqual(state.withSound, true);
-    assert.strictEqual(el("yt-video-panel").hidden, false);
-    assert.strictEqual(el("yt-embed-slot").hidden, false);
-    const iframe = el("yt-embed-slot").children[0];
-    assert.match(iframe.src, /^https:\/\/www\.youtube-nocookie\.com\/embed\/owrhKIN3Y90\?/);
-    assert.doesNotMatch(iframe.src, /mute=1/);
-    assert.match(iframe.title, /YouTube player: Carefree/);
-    assert.match(el("yt-video-note").textContent, /doesn't go through SpotTube's crossfade/);
+    for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+    assert.strictEqual(shell.getYouTubeVideoState().open, false);
+    assert.strictEqual(el("yt-video-panel").hidden, true);
+    assert.match(el("library-toast").textContent, /“Carefree”: YouTube videos need the app's small server/);
 });
 
 test("app: the playbar Video toggle shows the synced muted video, captions, and hides for other songs", async () => {

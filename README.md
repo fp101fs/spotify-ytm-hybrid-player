@@ -34,7 +34,7 @@ A static-first music player that mixes Spotify's 3-pane layout, Daily Mixes and 
 - **Notice:** only add videos you have the right to play. Public-domain and Creative Commons music is a safe choice. The app shows this as a notice and doesn't check licenses.
 - A few public-domain and Creative Commons videos are offered as suggestions, with credits. They are listed in `yt-allowlist.json` (`id`, `title`, `artist`, plus optional `license`, `source`, `album`, `genre`, `moods`, …).
 - Sound goes through the app's server (`/api/yt`, using `@distube/ytdl-core`), so crossfade, mixes and MediaSession work. **Video** shows a muted copy that follows the audio, with captions when YouTube has them.
-- Without the server (plain static hosting), or when YouTube blocks the server (for example "Sign in to confirm you're not a bot", common on cloud hosts), videos open in YouTube's own player instead.
+- YouTube videos only ever play through the app's server (ytdl-core), never YouTube's own player. Without the server (plain static hosting), or when YouTube blocks it (for example "Sign in to confirm you're not a bot", which Vercel gets on every signed-out request), the app shows the error and, where cookies would help, an "Add YouTube cookies" button.
 - **YouTube Music search.** Typing in the top search bar also searches YouTube Music songs (`/api/yt/search`), with autocomplete suggestions under the bar (`/api/yt/suggest`, arrow keys + Enter). Results show in a **YouTube Music** section. Tap a row to play it right away (it's added to YouTube videos). The ⋮ menu offers Play next, Add to YouTube videos, and Open on YouTube.
 - **Audio only** (on by default, switch in the YouTube Music section) plays YouTube tracks as sound only. Turn it off to have the music video open with each YouTube track.
 - **Bot check fix: YouTube cookies.** The bot-check error offers **Add YouTube cookies** (also a 🍪 button under "Add YouTube video"). The modal walks through installing [Cookie-Editor](https://chromewebstore.google.com/detail/cookie-editor/hlkenndednhfkekhgcdicdfddnkalmdm), signing in on YouTube, and clicking **Export → JSON**. Paste the export into the dashed box, or drop or choose a saved file. It also accepts a Netscape `cookies.txt` or a raw `Cookie` header. Use a spare Google account.
@@ -65,7 +65,7 @@ Songs you import in the browser don't need any of this; they stay on that device
 
 ## Deploy
 
-Click the button above, or with the Vercel CLI: `vercel --prod`. `vercel.json` sets the build command (`node scripts/build-catalog.js`), serves the repo root as static output, and adds `Accept-Ranges` and long-cache headers for `songs/` and `Images/`. `api/yt.js` deploys as a Vercel function (60 s, 1 GB). YouTube may bot-check Vercel's servers; add YouTube cookies (see above) or the app falls back to YouTube's player.
+Click the button above, or with the Vercel CLI: `vercel --prod`. `vercel.json` sets the build command (`node scripts/build-catalog.js`), serves the repo root as static output, and adds `Accept-Ranges` and long-cache headers for `songs/` and `Images/`. `api/yt.js` deploys as a Vercel function (60 s, 1 GB). YouTube bot-checks Vercel's servers, so YouTube playback there needs YouTube cookies (see above). Export them from a private window and close it afterwards, or YouTube signs them out.
 
 ## Tests
 

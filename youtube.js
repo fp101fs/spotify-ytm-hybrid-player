@@ -179,23 +179,13 @@
         return Boolean(track && track.source === "youtube" && isVideoId(track.youtubeId));
     }
 
-    /** Privacy-friendly embed for the watch-only fallback (its audio can't go through the crossfade). */
-    function buildEmbedUrl(id, startSeconds = 0, options = {}) {
-        const params = new URLSearchParams({ rel: "0", modestbranding: "1", playsinline: "1" });
-        const start = Math.floor(Number(startSeconds) || 0);
-        if (start > 0) params.set("start", String(start));
-        if (options.autoplay) params.set("autoplay", "1");
-        if (options.captions) params.set("cc_load_policy", "1");
-        if (options.mute) params.set("mute", "1");
-        return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?${params}`;
-    }
-
     // Plain-language messages for the server's error codes (see api/_lib/yt-server.js mapYtError).
     const ERROR_MESSAGES = {
         INVALID_ID: "That doesn't look like a YouTube video link. Paste a watch, youtu.be, Shorts or music.youtube.com link.",
         BOT_CHECK:
-            "YouTube asked this server to confirm it isn't a bot (“Sign in to confirm you're not a bot”). This happens most on cloud hosts. Add your YouTube cookies to fix it, run the app on your own computer with npm start, or watch it in YouTube's player.",
-        COOKIE_EXPIRED: "Your saved YouTube cookies have expired or were signed out. Add fresh ones to keep playing videos here.",
+            "YouTube asked this server to confirm it isn't a bot (“Sign in to confirm you're not a bot”). This happens on cloud hosts like Vercel. Add your YouTube cookies to fix it, or run the app on your own computer with npm start.",
+        COOKIE_EXPIRED:
+            "YouTube treated your cookies as signed out, so they were removed. This happens when the browser you exported from keeps using that sign-in. Export fresh ones from a private (Incognito) window, then close that window without signing out.",
         AGE_RESTRICTED: "YouTube has made this video age-restricted, so it can't be played without signing in.",
         REGION_BLOCKED: "This video isn't available in the server's country.",
         NOT_FOUND: "This video was removed from YouTube or made private.",
@@ -204,16 +194,11 @@
         NO_FORMAT: "YouTube didn't offer a playable audio or video stream for this video.",
         UPSTREAM: "Couldn't reach YouTube from the server. Check the connection and try again.",
         NO_SERVER:
-            "YouTube videos need the app's small server, which isn't running here. Run npm start (it serves the app and /api), or deploy to Vercel. Until then videos open in YouTube's own player.",
+            "YouTube videos need the app's small server, which isn't running here. Run npm start (it serves the app and /api), or deploy to Vercel.",
     };
 
     function describeYtError(code, fallback = "") {
         return ERROR_MESSAGES[code] || fallback || "Something went wrong playing this YouTube video.";
-    }
-
-    /** Whether the code means "watch it with YouTube's own player instead" is worth offering. */
-    function canFallBackToEmbed(code) {
-        return ["BOT_CHECK", "COOKIE_EXPIRED", "RATE_LIMITED", "UPSTREAM", "NO_FORMAT", "NO_SERVER", "REGION_BLOCKED"].includes(code);
     }
 
     /** Whether adding YouTube sign-in cookies would fix this error. */
@@ -250,9 +235,7 @@
         isYouTubeTrack,
         streamUrl,
         thumbnailUrl,
-        buildEmbedUrl,
         describeYtError,
-        canFallBackToEmbed,
         computeVideoSync,
         needsCookies,
         ERROR_MESSAGES,
